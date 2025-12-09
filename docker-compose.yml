@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  rapibase:
+    build: .
+    ports:
+      - "${PORT:-8080}:8080"
+    environment:
+      # Database
+      - DATABASE_URL=postgres://rapibase:rapibase@db:5432/rapibase?sslmode=disable
+      
+      # Server
+      - PORT=8080
+      - APP_URL=${APP_URL:-http://localhost:8080}
+      - CORS_ORIGINS=${CORS_ORIGINS:-*}
+      
+      # Auth
+      - JWT_SECRET=${JWT_SECRET:-change-this-secret-in-production}
+      - ADMIN_EMAIL=${ADMIN_EMAIL:-admin@rapibase.local}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
+      
+      # SMTP (optional)
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASS=${SMTP_PASS:-}
+      - SMTP_FROM=${SMTP_FROM:-}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_USER=rapibase
+      - POSTGRES_PASSWORD=rapibase
+      - POSTGRES_DB=rapibase
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rapibase"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

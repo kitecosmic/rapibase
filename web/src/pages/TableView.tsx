@@ -1,0 +1,828 @@
+import { useState } from 'react'
+import { useParams, Link } from 'react-router-dom'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { tables, importExport } from '../lib/api'
+import {
+  ArrowLeft,
+  Plus,
+  Trash2,
+  Edit2,
+  Save,
+  X,
+  Download,
+  ChevronLeft,
+  ChevronRight,
+  Loader2,
+  Code,
+  Table2,
+  Copy,
+  Check,
+} from 'lucide-react'
+
+type TabType = 'data' | 'api'
+
+export default function TableView() {
+  const { name } = useParams<{ name: string }>()
+  const queryClient = useQueryClient()
+  const [activeTab, setActiveTab] = useState<TabType>('data')
+  const [page, setPage] = useState(1)
+  const [editingRow, setEditingRow] = useState<any>(null)
+  const [editData, setEditData] = useState<any>({})
+  const [showInsert, setShowInsert] = useState(false)
+  const [insertData, setInsertData] = useState<any>({})
+  const [selectedLang, setSelectedLang] = useState('javascript')
+  const [copiedCode, setCopiedCode] = useState<string | null>(null)
+
+  const { data: schema } = useQuery({
+    queryKey: ['table-schema', name],
+    queryFn: () => tables.get(name!),
+    enabled: !!name,
+  })
+
+  // Fetch project info (API keys)
+  const { data: projectData } = useQuery({
+    queryKey: ['project'],
+    queryFn: async () => {
+      const stored = localStorage.getItem('rapibase-auth')
+      if (!stored) return null
+      const parsed = JSON.parse(stored)
+      const token = parsed?.state?.token
+      if (!token) return null
+      const res = await fetch('/api/v1/project', {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+      if (!res.ok) return null
+      return res.json()
+    },
+  })
+
+  const anonKey = projectData?.anon_key || 'YOUR_ANON_KEY'
+
+  const { data: rowsData, isLoading } = useQuery({
+    queryKey: ['table-rows', name, page],
+    queryFn: () => tables.getRows(name!, page, 50),
+    enabled: !!name,
+  })
+
+  const insertMutation = useMutation({
+    mutationFn: (data: any) => tables.insertRow(name!, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['table-rows', name] })
+      queryClient.invalidateQueries({ queryKey: ['tables'] })
+      setShowInsert(false)
+      setInsertData({})
+    },
+  })
+
+  const updateMutation = useMutation({
+    mutationFn: ({ id, data }: { id: any; data: any }) => tables.updateRow(name!, id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['table-rows', name] })
+      setEditingRow(null)
+      setEditData({})
+    },
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: any) => tables.deleteRow(name!, id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['table-rows', name] })
+      queryClient.invalidateQueries({ queryKey: ['tables'] })
+    },
+  })
+
+  const handleExport = async (format: 'json' | 'sql') => {
+    const blob = await importExport.exportTable(name!, format)
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${name}.${format}`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const columns = schema?.columns || []
+  const rows = rowsData?.data || []
+  const totalPages = rowsData?.total_pages || 1
+  const primaryKey = schema?.primary_key || 'id'
+  const baseUrl = window.location.origin
+
+  const copyToClipboard = (code: string, id: string) => {
+    navigator.clipboard.writeText(code)
+    setCopiedCode(id)
+    setTimeout(() => setCopiedCode(null), 2000)
+  }
+
+  // Generate API snippets for this table
+  // Uses the REST API endpoint /api/v1/rest/v1/:table with apikey
+  const getTableSnippets = () => ({
+    javascript: {
+      name: 'JavaScript',
+      select: `// Option 1: Client-side (user authenticated)
+const ANON_KEY = '${anonKey}';
+const response = await fetch('${baseUrl}/api/v1/rest/v1/${name}', {
+  headers: {
+    'apikey': ANON_KEY,
+    'Authorization': \`Bearer \${token}\`  // JWT from signin
+  }
+});
+
+// Option 2: Server-side / Admin (no user auth needed)
+const SERVICE_KEY = 'YOUR_SERVICE_KEY';  // Keep secret!
+const response = await fetch('${baseUrl}/api/v1/rest/v1/${name}', {
+  headers: { 'apikey': SERVICE_KEY }
+});
+
+const { data, total_rows, page, total_pages } = await response.json();`,
+
+      selectFilter: `// Get rows with pagination
+const response = await fetch('${baseUrl}/api/v1/rest/v1/${name}?page=1&limit=50', {
+  headers: {
+    'apikey': ANON_KEY,
+    'Authorization': \`Bearer \${token}\`
+  }
+});`,
+
+      insert: `// Insert a new row
+const response = await fetch('${baseUrl}/api/v1/rest/v1/${name}', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'apikey': ANON_KEY,
+    'Authorization': \`Bearer \${token}\`
+  },
+  body: JSON.stringify({
+    ${columns.filter((c: any) => !c.type?.includes('SERIAL')).slice(0, 3).map((c: any) => `${c.name}: 'value'`).join(',\n    ')}
+  })
+});`,
+
+      update: `// Update a row by ${primaryKey}
+const response = await fetch('${baseUrl}/api/v1/rest/v1/${name}/\${${primaryKey}}', {
+  method: 'PUT',
+  headers: {
+    'Content-Type': 'application/json',
+    'apikey': ANON_KEY,
+    'Authorization': \`Bearer \${token}\`
+  },
+  body: JSON.stringify({
+    ${columns.filter((c: any) => !c.is_primary_key).slice(0, 2).map((c: any) => `${c.name}: 'new_value'`).join(',\n    ')}
+  })
+});`,
+
+      delete: `// Delete a row by ${primaryKey}
+const response = await fetch('${baseUrl}/api/v1/rest/v1/${name}/\${${primaryKey}}', {
+  method: 'DELETE',
+  headers: {
+    'apikey': ANON_KEY,
+    'Authorization': \`Bearer \${token}\`
+  }
+});`
+    },
+    curl: {
+      name: 'cURL',
+      select: `# Option 1: Client-side (user authenticated)
+curl ${baseUrl}/api/v1/rest/v1/${name} \\
+  -H "apikey: ${anonKey}" \\
+  -H "Authorization: Bearer YOUR_TOKEN"
+
+# Option 2: Server-side / Admin (no user auth needed)
+curl ${baseUrl}/api/v1/rest/v1/${name} \\
+  -H "apikey: YOUR_SERVICE_KEY"`,
+
+      selectFilter: `# Get rows with pagination
+curl "${baseUrl}/api/v1/rest/v1/${name}?page=1&limit=50" \\
+  -H "apikey: ${anonKey}" \\
+  -H "Authorization: Bearer YOUR_TOKEN"`,
+
+      insert: `# Insert a new row
+curl -X POST ${baseUrl}/api/v1/rest/v1/${name} \\
+  -H "Content-Type: application/json" \\
+  -H "apikey: ${anonKey}" \\
+  -H "Authorization: Bearer YOUR_TOKEN" \\
+  -d '{ ${columns.filter((c: any) => !c.type?.includes('SERIAL')).slice(0, 2).map((c: any) => `"${c.name}": "value"`).join(', ')} }'`,
+
+      update: `# Update a row
+curl -X PUT ${baseUrl}/api/v1/rest/v1/${name}/ID \\
+  -H "Content-Type: application/json" \\
+  -H "apikey: ${anonKey}" \\
+  -H "Authorization: Bearer YOUR_TOKEN" \\
+  -d '{ ${columns.filter((c: any) => !c.is_primary_key).slice(0, 2).map((c: any) => `"${c.name}": "new_value"`).join(', ')} }'`,
+
+      delete: `# Delete a row
+curl -X DELETE ${baseUrl}/api/v1/rest/v1/${name}/ID \\
+  -H "apikey: ${anonKey}" \\
+  -H "Authorization: Bearer YOUR_TOKEN"`
+    },
+    python: {
+      name: 'Python',
+      select: `import requests
+
+ANON_KEY = '${anonKey}'
+
+# Get all rows from ${name}
+headers = {
+    'apikey': ANON_KEY,
+    'Authorization': f'Bearer {token}'
+}
+response = requests.get('${baseUrl}/api/v1/rest/v1/${name}', headers=headers)
+data = response.json()`,
+
+      selectFilter: `# Get rows with pagination
+response = requests.get(
+    '${baseUrl}/api/v1/rest/v1/${name}',
+    params={'page': 1, 'limit': 50},
+    headers=headers
+)`,
+
+      insert: `# Insert a new row
+response = requests.post(
+    '${baseUrl}/api/v1/rest/v1/${name}',
+    headers=headers,
+    json={
+        ${columns.filter((c: any) => !c.type?.includes('SERIAL')).slice(0, 3).map((c: any) => `'${c.name}': 'value'`).join(',\n        ')}
+    }
+)`,
+
+      update: `# Update a row
+response = requests.put(
+    f'${baseUrl}/api/v1/rest/v1/${name}/{${primaryKey}}',
+    headers=headers,
+    json={
+        ${columns.filter((c: any) => !c.is_primary_key).slice(0, 2).map((c: any) => `'${c.name}': 'new_value'`).join(',\n        ')}
+    }
+)`,
+
+      delete: `# Delete a row
+response = requests.delete(
+    f'${baseUrl}/api/v1/rest/v1/${name}/{${primaryKey}}',
+    headers=headers
+)`
+    },
+    go: {
+      name: 'Go',
+      select: `package main
+
+import (
+    "net/http"
+    "io"
+    "fmt"
+)
+
+const ANON_KEY = "${anonKey}"
+
+// Get all rows from ${name}
+req, _ := http.NewRequest("GET", "${baseUrl}/api/v1/rest/v1/${name}", nil)
+req.Header.Set("apikey", ANON_KEY)
+req.Header.Set("Authorization", "Bearer "+token)
+
+client := &http.Client{}
+resp, _ := client.Do(req)
+defer resp.Body.Close()
+
+body, _ := io.ReadAll(resp.Body)
+fmt.Println(string(body))`,
+
+      selectFilter: `// Get rows with pagination
+req, _ := http.NewRequest("GET", "${baseUrl}/api/v1/rest/v1/${name}?page=1&limit=50", nil)
+req.Header.Set("apikey", ANON_KEY)
+req.Header.Set("Authorization", "Bearer "+token)`,
+
+      insert: `// Insert a new row
+import "bytes"
+
+data := []byte(\`{"${columns.filter((c: any) => !c.type?.includes('SERIAL')).slice(0, 2).map((c: any) => `${c.name}`).join('": "value", "')}": "value"}\`)
+req, _ := http.NewRequest("POST", "${baseUrl}/api/v1/rest/v1/${name}", bytes.NewBuffer(data))
+req.Header.Set("Content-Type", "application/json")
+req.Header.Set("apikey", ANON_KEY)
+req.Header.Set("Authorization", "Bearer "+token)
+
+resp, _ := client.Do(req)`,
+
+      update: `// Update a row
+data := []byte(\`{"${columns.filter((c: any) => !c.is_primary_key).slice(0, 2).map((c: any) => `${c.name}`).join('": "new_value", "')}": "new_value"}\`)
+req, _ := http.NewRequest("PUT", "${baseUrl}/api/v1/rest/v1/${name}/"+id, bytes.NewBuffer(data))
+req.Header.Set("Content-Type", "application/json")
+req.Header.Set("apikey", ANON_KEY)
+req.Header.Set("Authorization", "Bearer "+token)
+
+resp, _ := client.Do(req)`,
+
+      delete: `// Delete a row
+req, _ := http.NewRequest("DELETE", "${baseUrl}/api/v1/rest/v1/${name}/"+id, nil)
+req.Header.Set("apikey", ANON_KEY)
+req.Header.Set("Authorization", "Bearer "+token)
+
+resp, _ := client.Do(req)`
+    },
+    php: {
+      name: 'PHP',
+      select: `<?php
+$ANON_KEY = '${anonKey}';
+
+// Get all rows from ${name}
+$ch = curl_init('${baseUrl}/api/v1/rest/v1/${name}');
+curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+curl_setopt($ch, CURLOPT_HTTPHEADER, [
+    'apikey: ' . $ANON_KEY,
+    'Authorization: Bearer ' . $token
+]);
+
+$response = curl_exec($ch);
+$data = json_decode($response, true);
+curl_close($ch);`,
+
+      selectFilter: `// Get rows with pagination
+$ch = curl_init('${baseUrl}/api/v1/rest/v1/${name}?page=1&limit=50');
+curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+curl_setopt($ch, CURLOPT_HTTPHEADER, [
+    'apikey: ' . $ANON_KEY,
+    'Authorization: Bearer ' . $token
+]);`,
+
+      insert: `// Insert a new row
+$ch = curl_init('${baseUrl}/api/v1/rest/v1/${name}');
+curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+curl_setopt($ch, CURLOPT_POST, true);
+curl_setopt($ch, CURLOPT_HTTPHEADER, [
+    'Content-Type: application/json',
+    'apikey: ' . $ANON_KEY,
+    'Authorization: Bearer ' . $token
+]);
+curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode([
+    ${columns.filter((c: any) => !c.type?.includes('SERIAL')).slice(0, 3).map((c: any) => `'${c.name}' => 'value'`).join(',\n    ')}
+]));
+
+$response = curl_exec($ch);`,
+
+      update: `// Update a row
+$ch = curl_init('${baseUrl}/api/v1/rest/v1/${name}/' . $id);
+curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'PUT');
+curl_setopt($ch, CURLOPT_HTTPHEADER, [
+    'Content-Type: application/json',
+    'apikey: ' . $ANON_KEY,
+    'Authorization: Bearer ' . $token
+]);
+curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode([
+    ${columns.filter((c: any) => !c.is_primary_key).slice(0, 2).map((c: any) => `'${c.name}' => 'new_value'`).join(',\n    ')}
+]));
+
+$response = curl_exec($ch);`,
+
+      delete: `// Delete a row
+$ch = curl_init('${baseUrl}/api/v1/rest/v1/${name}/' . $id);
+curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'DELETE');
+curl_setopt($ch, CURLOPT_HTTPHEADER, [
+    'apikey: ' . $ANON_KEY,
+    'Authorization: Bearer ' . $token
+]);
+
+curl_exec($ch);
+curl_close($ch);`
+    }
+  })
+
+  const snippets = getTableSnippets()
+  const currentSnippets = snippets[selectedLang as keyof typeof snippets]
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center gap-4">
+          <Link
+            to="/tables"
+            className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+          >
+            <ArrowLeft className="w-5 h-5" />
+          </Link>
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">{name}</h1>
+            <p className="text-gray-600 text-sm">
+              {rowsData?.total_rows?.toLocaleString() || 0} rows · {columns.length} columns
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="relative group">
+            <button className="flex items-center gap-2 px-3 py-2 text-gray-700 hover:bg-gray-100 rounded-lg transition-colors">
+              <Download className="w-4 h-4" />
+              Export
+            </button>
+            <div className="absolute right-0 mt-1 w-32 bg-white border border-gray-200 rounded-lg shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-10">
+              <button
+                onClick={() => handleExport('json')}
+                className="w-full px-4 py-2 text-left text-sm hover:bg-gray-50"
+              >
+                JSON
+              </button>
+              <button
+                onClick={() => handleExport('sql')}
+                className="w-full px-4 py-2 text-left text-sm hover:bg-gray-50"
+              >
+                SQL
+              </button>
+            </div>
+          </div>
+          {activeTab === 'data' && (
+            <button
+              onClick={() => setShowInsert(true)}
+              className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+            >
+              <Plus className="w-4 h-4" />
+              Insert Row
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex gap-1 mb-6 bg-gray-100 p-1 rounded-lg w-fit">
+        <button
+          onClick={() => setActiveTab('data')}
+          className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+            activeTab === 'data' 
+              ? 'bg-white text-gray-900 shadow-sm' 
+              : 'text-gray-600 hover:text-gray-900'
+          }`}
+        >
+          <span className="flex items-center gap-2">
+            <Table2 className="w-4 h-4" />
+            Data
+          </span>
+        </button>
+        <button
+          onClick={() => setActiveTab('api')}
+          className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+            activeTab === 'api' 
+              ? 'bg-white text-gray-900 shadow-sm' 
+              : 'text-gray-600 hover:text-gray-900'
+          }`}
+        >
+          <span className="flex items-center gap-2">
+            <Code className="w-4 h-4" />
+            API Docs
+          </span>
+        </button>
+      </div>
+
+      {/* Insert Modal */}
+      {showInsert && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-hidden">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+              <h2 className="text-lg font-semibold">Insert Row</h2>
+              <button onClick={() => setShowInsert(false)} className="text-gray-500 hover:text-gray-700">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-6 overflow-y-auto max-h-[calc(90vh-140px)] space-y-4">
+              {columns
+                .filter((col: any) => !col.type.includes('SERIAL'))
+                .map((col: any) => (
+                  <div key={col.name}>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      {col.name}
+                      {!col.nullable && <span className="text-red-500 ml-1">*</span>}
+                      <span className="text-gray-400 font-normal ml-2">{col.type}</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={insertData[col.name] || ''}
+                      onChange={(e) => setInsertData({ ...insertData, [col.name]: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                    />
+                  </div>
+                ))}
+            </div>
+            <div className="flex justify-end gap-3 px-6 py-4 border-t border-gray-200">
+              <button
+                onClick={() => setShowInsert(false)}
+                className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => insertMutation.mutate(insertData)}
+                disabled={insertMutation.isPending}
+                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
+              >
+                {insertMutation.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
+                Insert
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Data Tab */}
+      {activeTab === 'data' && (
+        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="bg-gray-50 border-b border-gray-200">
+                  {columns.map((col: any) => (
+                    <th
+                      key={col.name}
+                      className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider"
+                    >
+                      {col.name}
+                      {col.is_primary_key && (
+                        <span className="ml-1 text-blue-500">PK</span>
+                      )}
+                    </th>
+                  ))}
+                  <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider w-24">
+                    Actions
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-200">
+                {isLoading ? (
+                  <tr>
+                    <td colSpan={columns.length + 1} className="px-4 py-12 text-center">
+                      <Loader2 className="w-8 h-8 text-blue-600 animate-spin mx-auto" />
+                    </td>
+                  </tr>
+                ) : rows.length === 0 ? (
+                  <tr>
+                    <td colSpan={columns.length + 1} className="px-4 py-12 text-center text-gray-500">
+                      No data
+                    </td>
+                  </tr>
+                ) : (
+                  rows.map((row: any, rowIndex: number) => (
+                    <tr key={rowIndex} className="hover:bg-gray-50">
+                      {columns.map((col: any) => (
+                        <td key={col.name} className="px-4 py-3 text-sm text-gray-900">
+                          {editingRow === row[primaryKey] ? (
+                            <input
+                              type="text"
+                              value={editData[col.name] ?? row[col.name] ?? ''}
+                              onChange={(e) => setEditData({ ...editData, [col.name]: e.target.value })}
+                              className="w-full px-2 py-1 border border-gray-300 rounded text-sm"
+                              disabled={col.is_primary_key}
+                            />
+                          ) : (
+                            <span className="truncate block max-w-xs">
+                              {row[col.name] === null ? (
+                                <span className="text-gray-400 italic">null</span>
+                              ) : typeof row[col.name] === 'object' ? (
+                                JSON.stringify(row[col.name])
+                              ) : (
+                                String(row[col.name])
+                              )}
+                            </span>
+                          )}
+                        </td>
+                      ))}
+                      <td className="px-4 py-3 text-right">
+                        {editingRow === row[primaryKey] ? (
+                          <div className="flex items-center justify-end gap-1">
+                            <button
+                              onClick={() => updateMutation.mutate({ id: row[primaryKey], data: editData })}
+                              className="p-1 text-green-600 hover:bg-green-50 rounded"
+                            >
+                              <Save className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={() => {
+                                setEditingRow(null)
+                                setEditData({})
+                              }}
+                              className="p-1 text-gray-500 hover:bg-gray-100 rounded"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center justify-end gap-1">
+                            <button
+                              onClick={() => {
+                                setEditingRow(row[primaryKey])
+                                setEditData(row)
+                              }}
+                              className="p-1 text-gray-500 hover:bg-gray-100 rounded"
+                            >
+                              <Edit2 className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={() => {
+                                if (confirm('Delete this row?')) {
+                                  deleteMutation.mutate(row[primaryKey])
+                                }
+                              }}
+                              className="p-1 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Pagination */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between px-4 py-3 border-t border-gray-200">
+              <p className="text-sm text-gray-600">
+                Page {page} of {totalPages}
+              </p>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setPage(p => Math.max(1, p - 1))}
+                  disabled={page === 1}
+                  className="p-2 text-gray-500 hover:bg-gray-100 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                  disabled={page === totalPages}
+                  className="p-2 text-gray-500 hover:bg-gray-100 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* API Docs Tab */}
+      {activeTab === 'api' && (
+        <div className="space-y-6">
+          {/* Language Selector */}
+          <div className="flex items-center gap-4">
+            <span className="text-sm font-medium text-gray-700">Language:</span>
+            <select
+              value={selectedLang}
+              onChange={(e) => setSelectedLang(e.target.value)}
+              className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+            >
+              {Object.entries(snippets).map(([key, value]) => (
+                <option key={key} value={key}>{value.name}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* API Keys Info */}
+          <div className="bg-gradient-to-r from-blue-50 to-purple-50 rounded-xl border border-blue-200 p-6">
+            <h3 className="text-lg font-semibold text-gray-900 mb-3">🔑 API Keys</h3>
+            <div className="grid md:grid-cols-2 gap-4">
+              <div className="bg-white rounded-lg p-4 border border-blue-100">
+                <h4 className="font-medium text-blue-700 mb-2">Anon Key (Public)</h4>
+                <p className="text-sm text-gray-600 mb-2">For client-side apps. Requires user JWT for authenticated access.</p>
+                <code className="text-xs bg-blue-50 px-2 py-1 rounded block truncate">{anonKey}</code>
+              </div>
+              <div className="bg-white rounded-lg p-4 border border-purple-100">
+                <h4 className="font-medium text-purple-700 mb-2">Service Key (Secret)</h4>
+                <p className="text-sm text-gray-600 mb-2">For server-side/admin. Full access without user JWT.</p>
+                <p className="text-xs text-red-600">⚠️ Never expose in client-side code. Use for dashboards, scripts, etc.</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Schema Info */}
+          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-200">
+              <h2 className="text-lg font-semibold text-gray-900">Table Schema</h2>
+            </div>
+            <div className="p-6">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-gray-500">
+                      <th className="pb-2 font-medium">Column</th>
+                      <th className="pb-2 font-medium">Type</th>
+                      <th className="pb-2 font-medium">Nullable</th>
+                      <th className="pb-2 font-medium">Default</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {columns.map((col: any) => (
+                      <tr key={col.name}>
+                        <td className="py-2 font-mono text-blue-600">
+                          {col.name}
+                          {col.is_primary_key && <span className="ml-2 text-xs bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded">PK</span>}
+                        </td>
+                        <td className="py-2 font-mono text-gray-600">{col.type}</td>
+                        <td className="py-2">{col.nullable ? 'Yes' : 'No'}</td>
+                        <td className="py-2 font-mono text-gray-500 text-xs">{col.default_value || '-'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          {/* Select */}
+          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-200">
+              <h2 className="text-lg font-semibold text-gray-900">Read Rows</h2>
+              <p className="text-sm text-gray-600 mt-1">Fetch data from the table with pagination support.</p>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="mb-4">
+                <span className="inline-flex items-center px-2.5 py-1 rounded text-xs font-medium bg-blue-100 text-blue-700">GET</span>
+                <code className="ml-2 text-sm text-gray-700">/api/v1/tables/{name}/rows</code>
+              </div>
+              <div className="relative">
+                <pre className="bg-gray-900 text-gray-100 p-4 rounded-lg text-sm overflow-x-auto">
+                  <code>{currentSnippets.select}</code>
+                </pre>
+                <button
+                  onClick={() => copyToClipboard(currentSnippets.select, 'select')}
+                  className="absolute top-2 right-2 p-2 bg-gray-800 hover:bg-gray-700 rounded text-gray-400 hover:text-white transition-colors"
+                >
+                  {copiedCode === 'select' ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Insert */}
+          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-200">
+              <h2 className="text-lg font-semibold text-gray-900">Insert Row</h2>
+              <p className="text-sm text-gray-600 mt-1">Add a new row to the table.</p>
+            </div>
+            <div className="p-6">
+              <div className="mb-4">
+                <span className="inline-flex items-center px-2.5 py-1 rounded text-xs font-medium bg-green-100 text-green-700">POST</span>
+                <code className="ml-2 text-sm text-gray-700">/api/v1/tables/{name}/rows</code>
+              </div>
+              <div className="relative">
+                <pre className="bg-gray-900 text-gray-100 p-4 rounded-lg text-sm overflow-x-auto">
+                  <code>{currentSnippets.insert}</code>
+                </pre>
+                <button
+                  onClick={() => copyToClipboard(currentSnippets.insert, 'insert')}
+                  className="absolute top-2 right-2 p-2 bg-gray-800 hover:bg-gray-700 rounded text-gray-400 hover:text-white transition-colors"
+                >
+                  {copiedCode === 'insert' ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Update */}
+          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-200">
+              <h2 className="text-lg font-semibold text-gray-900">Update Row</h2>
+              <p className="text-sm text-gray-600 mt-1">Update an existing row by its primary key.</p>
+            </div>
+            <div className="p-6">
+              <div className="mb-4">
+                <span className="inline-flex items-center px-2.5 py-1 rounded text-xs font-medium bg-yellow-100 text-yellow-700">PUT</span>
+                <code className="ml-2 text-sm text-gray-700">/api/v1/tables/{name}/rows/:id</code>
+              </div>
+              <div className="relative">
+                <pre className="bg-gray-900 text-gray-100 p-4 rounded-lg text-sm overflow-x-auto">
+                  <code>{currentSnippets.update}</code>
+                </pre>
+                <button
+                  onClick={() => copyToClipboard(currentSnippets.update, 'update')}
+                  className="absolute top-2 right-2 p-2 bg-gray-800 hover:bg-gray-700 rounded text-gray-400 hover:text-white transition-colors"
+                >
+                  {copiedCode === 'update' ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Delete */}
+          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-200">
+              <h2 className="text-lg font-semibold text-gray-900">Delete Row</h2>
+              <p className="text-sm text-gray-600 mt-1">Remove a row from the table.</p>
+            </div>
+            <div className="p-6">
+              <div className="mb-4">
+                <span className="inline-flex items-center px-2.5 py-1 rounded text-xs font-medium bg-red-100 text-red-700">DELETE</span>
+                <code className="ml-2 text-sm text-gray-700">/api/v1/tables/{name}/rows/:id</code>
+              </div>
+              <div className="relative">
+                <pre className="bg-gray-900 text-gray-100 p-4 rounded-lg text-sm overflow-x-auto">
+                  <code>{currentSnippets.delete}</code>
+                </pre>
+                <button
+                  onClick={() => copyToClipboard(currentSnippets.delete, 'delete')}
+                  className="absolute top-2 right-2 p-2 bg-gray-800 hover:bg-gray-700 rounded text-gray-400 hover:text-white transition-colors"
+                >
+                  {copiedCode === 'delete' ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
