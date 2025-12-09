@@ -1,20 +1,31 @@
 # RapiBase
 
-🚀 **Open-source database management platform** - Similar to Supabase/PocketBase but simpler and faster to deploy.
+🚀 **Open-source Backend as a Service** - Similar to Supabase but simpler and faster to deploy. Authentication, REST API, and Admin Dashboard in a single binary.
 
 ![RapiBase](https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat&logo=go)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 ## Features
 
+### Core
 - ✅ **Visual Table Management** - Create, edit, and delete tables through a modern UI
 - ✅ **SQL Editor** - Execute raw SQL queries with syntax highlighting
 - ✅ **Data Import/Export** - Import from SQL or JSON, export to both formats
-- ✅ **Authentication** - JWT-based auth with login, register, and password reset
-- ✅ **SMTP Integration** - Email notifications for password recovery
+- ✅ **REST API** - Auto-generated CRUD endpoints for all your tables
 - ✅ **Docker Ready** - Single command deployment with docker-compose
-- ✅ **High Performance** - Built with Go and PostgreSQL connection pooling
-- ✅ **Lightweight** - ~20MB Docker image
+
+### Authentication
+- ✅ **User Auth for Your Apps** - Signup, signin, signout for third-party app users
+- ✅ **Magic Links** - Passwordless authentication via email
+- ✅ **Email Verification** - Verify user emails with one-click links
+- ✅ **Password Reset** - Forgot password flow with email
+- ✅ **JWT Tokens** - Configurable expiration times
+- ✅ **Rotating Refresh Tokens** - Single-use refresh tokens for security
+
+### Security
+- ✅ **API Keys** - Anon Key (public) and Service Key (admin)
+- ✅ **Rate Limiting** - Protect auth endpoints from abuse
+- ✅ **SMTP Integration** - Send emails via any SMTP provider
 
 ## Quick Start
 
@@ -22,8 +33,11 @@
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/rapibase.git
+git clone https://github.com/kitecosmic/rapibase.git
 cd rapibase
+
+# Copy environment file
+cp .env.example .env
 
 # Start with docker-compose
 docker-compose up -d
@@ -32,67 +46,136 @@ docker-compose up -d
 # Default credentials: admin@rapibase.local / admin123
 ```
 
-### Using Portainer
-
-1. Create a new Stack in Portainer
-2. Paste the contents of `docker-compose.yml`
-3. Set your environment variables
-4. Deploy!
-
 ### Manual Installation
 
 ```bash
 # Prerequisites: Go 1.21+, Node.js 20+, PostgreSQL
 
 # Clone
-git clone https://github.com/yourusername/rapibase.git
+git clone https://github.com/kitecosmic/rapibase.git
 cd rapibase
 
 # Build frontend
 cd web && npm install && npm run build && cd ..
 
-# Build backend
-go build -o rapibase ./cmd/rapibase
-
-# Set environment variables (see .env.example)
-export DATABASE_URL="postgres://user:pass@localhost:5432/rapibase"
-export JWT_SECRET="your-secret-key"
+# Copy and configure environment
+cp .env.example .env
+# Edit .env with your settings
 
 # Run
-./rapibase
+go run ./cmd/rapibase
 ```
 
 ## Configuration
 
-All configuration is done through environment variables:
+All configuration is done through environment variables. Copy `.env.example` to `.env`:
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `DATABASE_URL` | PostgreSQL connection string | `postgres://postgres:postgres@localhost:5432/rapibase` |
-| `PORT` | Server port | `8080` |
-| `APP_URL` | Public URL (for emails) | `http://localhost:8080` |
-| `JWT_SECRET` | Secret for JWT tokens | `change-this-secret-in-production` |
-| `ADMIN_EMAIL` | Initial admin email | `admin@rapibase.local` |
-| `ADMIN_PASSWORD` | Initial admin password | `admin123` |
-| `SMTP_HOST` | SMTP server host | - |
-| `SMTP_PORT` | SMTP server port | `587` |
-| `SMTP_USER` | SMTP username | - |
-| `SMTP_PASS` | SMTP password | - |
-| `SMTP_FROM` | From email address | - |
+```env
+# Database
+DATABASE_URL=postgres://rapibase:rapibase@localhost:5432/rapibase?sslmode=disable
+
+# Server
+PORT=8080
+APP_URL=http://localhost:8080
+CORS_ORIGINS=*
+
+# Auth (Admin Dashboard)
+JWT_SECRET=change-this-secret-in-production
+ADMIN_EMAIL=admin@rapibase.local
+ADMIN_PASSWORD=admin123
+
+# Token Expiration
+JWT_EXPIRY=1h           # Access token duration (default: 1 hour)
+REFRESH_EXPIRY=7d       # Refresh token duration (default: 7 days)
+
+# API Keys
+ANON_KEY=your-anon-key              # Public key for client-side apps
+SERVICE_KEY=your-service-key        # Secret key for server-side/admin
+
+# SMTP (optional - for email features)
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_USER=your-email@example.com
+SMTP_PASS=your-password
+SMTP_FROM=noreply@example.com
+SMTP_FROM_NAME=Your App Name
+
+# Auth Redirect URL (for third-party apps)
+AUTH_REDIRECT_URL=https://yourapp.com
+```
+
+## API Keys
+
+RapiBase uses two types of API keys:
+
+| Key | Use Case | JWT Required |
+|-----|----------|--------------|
+| **Anon Key** | Client-side apps (browsers, mobile) | ✅ Yes |
+| **Service Key** | Server-side, admin scripts, dashboards | ❌ No |
+
+```javascript
+// Client-side: Anon Key + JWT
+fetch('/api/v1/rest/v1/products', {
+  headers: { 
+    'apikey': 'ANON_KEY',
+    'Authorization': 'Bearer ' + accessToken
+  }
+})
+
+// Server-side: Service Key only
+fetch('/api/v1/rest/v1/products', {
+  headers: { 'apikey': 'SERVICE_KEY' }
+})
+```
 
 ## API Endpoints
 
-### Authentication
+### Admin Authentication (Dashboard)
 ```
-POST /api/v1/auth/login          - Login
-POST /api/v1/auth/register       - Register
+POST /api/v1/auth/login           - Admin login
 POST /api/v1/auth/forgot-password - Request password reset
 POST /api/v1/auth/reset-password  - Reset password
-POST /api/v1/auth/refresh        - Refresh token
-GET  /api/v1/auth/me             - Get current user
+POST /api/v1/auth/refresh         - Refresh token
+GET  /api/v1/auth/me              - Get current admin
 ```
 
-### Tables
+### User Authentication (For Your Apps)
+All endpoints require `apikey` header.
+
+```
+POST /api/v1/auth/v1/signup         - Create new user
+POST /api/v1/auth/v1/signin         - Sign in user
+POST /api/v1/auth/v1/token          - Refresh token (rotating)
+POST /api/v1/auth/v1/signout        - Sign out user
+
+POST /api/v1/auth/v1/magiclink      - Send magic link email
+GET  /api/v1/auth/v1/magic          - Verify magic link (from email)
+
+POST /api/v1/auth/v1/resend         - Resend verification email
+GET  /api/v1/auth/v1/verify         - Verify email (from email)
+
+POST /api/v1/auth/v1/forgot-password - Send password reset email
+POST /api/v1/auth/v1/reset-password  - Reset password with token
+```
+
+### REST API (For Your Apps)
+Requires `apikey` header. Anon Key also requires `Authorization: Bearer <token>`.
+
+```
+GET    /api/v1/rest/v1/:table           - Get rows (paginated)
+POST   /api/v1/rest/v1/:table           - Insert row
+PUT    /api/v1/rest/v1/:table/:id       - Update row
+DELETE /api/v1/rest/v1/:table/:id       - Delete row
+```
+
+Query parameters:
+- `page` - Page number (default: 1)
+- `page_size` - Rows per page (default: 50)
+- `order_by` - Column to sort by
+- `order_dir` - Sort direction (asc/desc)
+- `filter` - Filter rows (format: `column:op:value`)
+
+### Tables (Admin)
 ```
 GET    /api/v1/tables            - List all tables
 POST   /api/v1/tables            - Create table
@@ -100,20 +183,80 @@ GET    /api/v1/tables/:name      - Get table schema
 DELETE /api/v1/tables/:name      - Drop table
 ```
 
-### Rows
-```
-GET    /api/v1/tables/:name/rows     - Get rows (paginated)
-POST   /api/v1/tables/:name/rows     - Insert row
-PUT    /api/v1/tables/:name/rows/:id - Update row
-DELETE /api/v1/tables/:name/rows/:id - Delete row
-```
-
-### Query & Import/Export
+### SQL & Import/Export (Admin)
 ```
 POST /api/v1/query               - Execute SQL query
 POST /api/v1/import/sql          - Import SQL file
 POST /api/v1/import/json/:table  - Import JSON to table
 GET  /api/v1/export/:table       - Export table (format=json|sql)
+```
+
+## Authentication Flows
+
+### Magic Link (Passwordless)
+
+```javascript
+// 1. Request magic link
+await fetch('/api/v1/auth/v1/magiclink', {
+  method: 'POST',
+  headers: { 'apikey': ANON_KEY, 'Content-Type': 'application/json' },
+  body: JSON.stringify({ 
+    email: 'user@example.com',
+    redirect_url: 'https://yourapp.com/auth/callback'
+  })
+})
+
+// 2. User clicks email link → redirected to your app
+// https://yourapp.com/auth/callback#access_token=...&refresh_token=...
+
+// 3. Extract tokens in your callback page
+const hash = window.location.hash.substring(1)
+const params = new URLSearchParams(hash)
+const accessToken = params.get('access_token')
+const refreshToken = params.get('refresh_token')
+
+// 4. Store tokens and redirect to dashboard
+localStorage.setItem('access_token', accessToken)
+localStorage.setItem('refresh_token', refreshToken)
+window.location.href = '/dashboard'
+```
+
+### Email Verification
+
+```javascript
+// Request verification email
+await fetch('/api/v1/auth/v1/resend', {
+  method: 'POST',
+  headers: { 'apikey': ANON_KEY, 'Content-Type': 'application/json' },
+  body: JSON.stringify({ email: 'user@example.com' })
+})
+
+// User clicks email → redirected to:
+// https://yourapp.com?verified=true&email=user@example.com
+```
+
+### Password Reset
+
+```javascript
+// 1. Request reset email
+await fetch('/api/v1/auth/v1/forgot-password', {
+  method: 'POST',
+  headers: { 'apikey': ANON_KEY, 'Content-Type': 'application/json' },
+  body: JSON.stringify({ email: 'user@example.com' })
+})
+
+// 2. User clicks email → your reset page with token
+// https://yourapp.com/reset-password?token=abc123...
+
+// 3. Submit new password
+await fetch('/api/v1/auth/v1/reset-password', {
+  method: 'POST',
+  headers: { 'apikey': ANON_KEY, 'Content-Type': 'application/json' },
+  body: JSON.stringify({ 
+    token: 'abc123...',
+    new_password: 'newsecurepassword'
+  })
+})
 ```
 
 ## Architecture
@@ -124,12 +267,17 @@ rapibase/
 ├── internal/
 │   ├── api/               # HTTP handlers and routes
 │   │   ├── handlers/      # Request handlers
-│   │   └── middleware/    # Auth, rate limiting
+│   │   └── middleware/    # Auth, API keys, rate limiting
 │   ├── auth/              # JWT and SMTP
 │   ├── config/            # Configuration
 │   ├── database/          # PostgreSQL operations
 │   └── models/            # Data models
-├── web/                   # React frontend
+├── web/                   # React frontend (Admin Dashboard)
+│   └── src/pages/
+│       ├── Auth.tsx       # User management
+│       ├── Docs.tsx       # API documentation
+│       ├── Tables.tsx     # Table management
+│       └── ...
 ├── Dockerfile
 └── docker-compose.yml
 ```
@@ -137,11 +285,12 @@ rapibase/
 ## Security
 
 - Passwords hashed with bcrypt (cost 12)
-- JWT tokens with 24h expiration
-- Refresh tokens with 7 day expiration
+- Configurable JWT token expiration
+- Rotating refresh tokens (single-use)
+- API key authentication (Anon + Service keys)
 - Rate limiting on auth endpoints
 - SQL injection prevention with prepared statements
-- Internal tables protected from user access
+- Internal tables hidden from user access
 
 ## Development
 
@@ -164,4 +313,4 @@ Contributions are welcome! Please open an issue or PR.
 
 ---
 
-Made with ❤️ for the open-source community
+Made with ❤️ by [kitecosmic](https://github.com/kitecosmic)
