@@ -1,11 +1,11 @@
 services:
   rapibase:
     build: .
-    ports:
-      - "${PORT:-8080}:8080"
+    expose:
+      - "8080"
     environment:
-      # Database
-      - DATABASE_URL=postgres://rapibase:rapibase@db:5432/rapibase?sslmode=disable
+      # Database (uses 'db' service by default, override with DATABASE_URL env var)
+      - DATABASE_URL=${DATABASE_URL:-postgres://rapibase:rapibase@db:5432/rapibase?sslmode=disable}
       
       # Server
       - PORT=8080
