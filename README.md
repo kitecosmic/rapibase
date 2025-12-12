@@ -31,6 +31,11 @@
 
 ### Using Docker Compose (Recommended)
 
+First, make sure you have Docker installed. If not, follow the [official installation guide](https://docs.docker.com/get-docker/) or run:
+```bash
+curl -fsSL https://get.docker.com | sh
+```
+
 ```bash
 # Clone the repository
 git clone https://github.com/kitecosmic/rapibase.git
@@ -39,12 +44,51 @@ cd rapibase
 # Copy environment file
 cp .env.example .env
 
-# Start with docker-compose
-docker-compose up -d
+# Edit the configuration
+# IMPORTANT: You must edit this file to set your own passwords and secrets! (smtp)
+nano .env
 
-# Access at http://localhost:8080
+# Start with docker compose
+docker compose up -d
+
+# Access at http://localhost:8080 (or http://YOUR_SERVER_IP:8080)
 # Default credentials: admin@rapibase.local / admin123
 ```
+
+### Enable HTTPS (Recommended)
+
+We recommend using **Caddy** because it handles automatic SSL certificates (Let's Encrypt) and renewals for you.
+
+Run these commands on your VPS:
+
+```bash
+# 1. Install Caddy (Ubuntu/Debian)
+sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
+sudo apt update
+sudo apt install caddy
+
+# 2. Configure your domain
+# Replace 'yourdomain.com' with your actual domain
+sudo nano /etc/caddy/Caddyfile
+```
+
+Add this to the file (replace `yourdomain.com`):
+
+```caddyfile
+yourdomain.com {
+    reverse_proxy localhost:8080
+}
+```
+
+Then reload Caddy:
+
+```bash
+sudo systemctl reload caddy
+```
+
+Done! Access your site at `https://yourdomain.com`. Caddy will automatically keep your SSL certificate valid forever.
 
 ### Manual Installation
 
