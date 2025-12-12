@@ -3,7 +3,7 @@
 🚀 **Open-source Backend as a Service** - Similar to Supabase but simpler and faster to deploy. Authentication, REST API, and Admin Dashboard in a single binary.
 
 ![RapiBase](https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat&logo=go)
-![License](https://img.shields.io/badge/license-MIT-green)
+![License](https://img.shields.io/badge/license-AGPLv3-blue)
 
 ## Features
 
@@ -359,7 +359,10 @@ cd web && npm run dev
 
 ## License
 
-MIT License - feel free to use in personal and commercial projects.
+AGPLv3 License.
+
+RapiBase is open source software. You are free to use it for personal and commercial projects.
+However, if you modify the code and offer it as a service to others (SaaS), you must make your modifications open source under the same license.
 
 ## Contributing
 
