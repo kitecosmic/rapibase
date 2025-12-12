@@ -1,11 +1,18 @@
+# Docker Compose for RapiBase with external PostgreSQL
+# Use this when you already have a PostgreSQL database (Coolify, Railway, Supabase, etc.)
+#
+# Usage:
+#   1. Copy .env.example to .env and configure your DATABASE_URL
+#   2. Run: docker compose -f docker-compose.standalone.yaml up -d
+
 services:
   rapibase:
     build: .
     ports:
       - "${PORT:-8080}:8080"
     environment:
-      # Database
-      - DATABASE_URL=postgres://rapibase:rapibase@db:5432/rapibase?sslmode=disable
+      # Database (REQUIRED - point to your external PostgreSQL)
+      - DATABASE_URL=${DATABASE_URL}
       
       # Server
       - PORT=8080
@@ -34,9 +41,6 @@ services:
       
       # Auth Redirect
       - AUTH_REDIRECT_URL=${AUTH_REDIRECT_URL:-}
-    depends_on:
-      db:
-        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/api/v1/health"]
@@ -44,21 +48,3 @@ services:
       timeout: 10s
       start_period: 5s
       retries: 3
-
-  db:
-    image: postgres:16-alpine
-    environment:
-      - POSTGRES_USER=rapibase
-      - POSTGRES_PASSWORD=rapibase
-      - POSTGRES_DB=rapibase
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U rapibase"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-
-volumes:
-  postgres_data:

@@ -26,5 +26,9 @@ COPY --from=backend-builder /app/web/dist ./web/dist
 EXPOSE 8080
 
 ENV PORT=8080
+ENV HOST=0.0.0.0
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:8080/api/v1/health || exit 1
 
 CMD ["./rapibase"]
