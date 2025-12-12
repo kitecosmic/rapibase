@@ -59,22 +59,31 @@ docker compose up -d
 
 We recommend using **Caddy** because it handles automatic SSL certificates (Let's Encrypt) and renewals for you.
 
-Run these commands on your VPS:
+Run these commands one by one on your VPS:
 
 ```bash
-# 1. Install Caddy (Ubuntu/Debian)
+# 1. Install required packages
 sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https
+
+# 2. Add Caddy GPG key
 curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+
+# 3. Add Caddy repository
 curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
+
+# 4. Install Caddy
 sudo apt update
 sudo apt install caddy
+```
 
-# 2. Configure your domain
-# Replace 'yourdomain.com' with your actual domain
+### Configure Domain
+
+1. Open the Caddy configuration file:
+```bash
 sudo nano /etc/caddy/Caddyfile
 ```
 
-Add this to the file (replace `yourdomain.com`):
+2. **Delete everything** in that file and paste this (replace `yourdomain.com` with your real domain):
 
 ```caddyfile
 yourdomain.com {
@@ -82,8 +91,9 @@ yourdomain.com {
 }
 ```
 
-Then reload Caddy:
+3. Save and exit (Press `Ctrl+X`, then `Y`, then `Enter`).
 
+4. Reload Caddy to apply changes:
 ```bash
 sudo systemctl reload caddy
 ```
