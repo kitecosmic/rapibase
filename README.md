@@ -100,6 +100,16 @@ sudo systemctl reload caddy
 
 Done! Access your site at `https://yourdomain.com`. Caddy will automatically keep your SSL certificate valid forever.
 
+### Updating to Latest Version
+
+```bash
+cd ~/rapibase
+git pull
+docker compose up -d --build
+```
+
+That's it! Docker will rebuild the image with the new code and restart the container.
+
 ### Manual Installation
 
 ```bash
