@@ -96,6 +96,7 @@ func (db *DB) Migrate() error {
 			phone_verified BOOLEAN DEFAULT FALSE,
 			full_name VARCHAR(255),
 			avatar_url TEXT,
+			role VARCHAR(50) DEFAULT 'user',
 			metadata JSONB DEFAULT '{}',
 			provider VARCHAR(50) DEFAULT 'email',
 			provider_id VARCHAR(255),
@@ -103,6 +104,12 @@ func (db *DB) Migrate() error {
 			created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
 			updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 		)`,
+
+		// Add role column if not exists (migration for existing databases)
+		`DO $$ BEGIN
+			ALTER TABLE auth_users ADD COLUMN IF NOT EXISTS role VARCHAR(50) DEFAULT 'user';
+		EXCEPTION WHEN others THEN NULL;
+		END $$`,
 
 		// Auth refresh tokens for app users
 		`CREATE TABLE IF NOT EXISTS auth_refresh_tokens (
@@ -130,6 +137,78 @@ func (db *DB) Migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_auth_refresh_tokens_user ON auth_refresh_tokens(user_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_auth_tokens_token ON auth_tokens(token)`,
 		`CREATE INDEX IF NOT EXISTS idx_auth_tokens_user ON auth_tokens(user_id)`,
+
+		// ============================================
+		// WEBHOOKS
+		// ============================================
+		`CREATE TABLE IF NOT EXISTS _rapibase_webhooks (
+			id BIGSERIAL PRIMARY KEY,
+			name VARCHAR(255) NOT NULL,
+			url TEXT NOT NULL,
+			secret VARCHAR(255),
+			events JSONB NOT NULL DEFAULT '[]',
+			headers JSONB DEFAULT '{}',
+			enabled BOOLEAN DEFAULT TRUE,
+			created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+			updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+		)`,
+
+		`CREATE TABLE IF NOT EXISTS _rapibase_webhook_logs (
+			id BIGSERIAL PRIMARY KEY,
+			webhook_id BIGINT REFERENCES _rapibase_webhooks(id) ON DELETE SET NULL,
+			event VARCHAR(255) NOT NULL,
+			payload TEXT,
+			response_status INT,
+			response_body TEXT,
+			attempts INT DEFAULT 1,
+			success BOOLEAN DEFAULT FALSE,
+			error TEXT,
+			created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+		)`,
+
+		`CREATE INDEX IF NOT EXISTS idx_webhook_logs_webhook ON _rapibase_webhook_logs(webhook_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_webhook_logs_created ON _rapibase_webhook_logs(created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_webhooks_enabled ON _rapibase_webhooks(enabled)`,
+
+		// ============================================
+		// PUSH NOTIFICATIONS
+		// ============================================
+		`CREATE TABLE IF NOT EXISTS _rapibase_push_config (
+			id BIGSERIAL PRIMARY KEY,
+			platform VARCHAR(50) NOT NULL UNIQUE,
+			config JSONB NOT NULL DEFAULT '{}',
+			enabled BOOLEAN DEFAULT FALSE,
+			created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+			updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+		)`,
+
+		`CREATE TABLE IF NOT EXISTS _rapibase_push_subscriptions (
+			id BIGSERIAL PRIMARY KEY,
+			user_id UUID REFERENCES auth_users(id) ON DELETE CASCADE,
+			platform VARCHAR(50) NOT NULL,
+			token TEXT NOT NULL,
+			endpoint TEXT,
+			metadata JSONB DEFAULT '{}',
+			created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+			expires_at TIMESTAMP WITH TIME ZONE,
+			UNIQUE(user_id, platform, token)
+		)`,
+
+		`CREATE TABLE IF NOT EXISTS _rapibase_notifications (
+			id BIGSERIAL PRIMARY KEY,
+			user_id UUID REFERENCES auth_users(id) ON DELETE CASCADE,
+			title VARCHAR(255) NOT NULL,
+			body TEXT,
+			data JSONB DEFAULT '{}',
+			sent_at TIMESTAMP WITH TIME ZONE,
+			read_at TIMESTAMP WITH TIME ZONE,
+			created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+		)`,
+
+		`CREATE INDEX IF NOT EXISTS idx_push_subs_user ON _rapibase_push_subscriptions(user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_push_subs_platform ON _rapibase_push_subscriptions(platform)`,
+		`CREATE INDEX IF NOT EXISTS idx_notifications_user ON _rapibase_notifications(user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_notifications_read ON _rapibase_notifications(user_id, read_at)`,
 	}
 
 	for _, migration := range migrations {

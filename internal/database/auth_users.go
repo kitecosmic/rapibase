@@ -20,6 +20,7 @@ type AuthUser struct {
 	PhoneVerified bool                   `json:"phone_verified"`
 	FullName      *string                `json:"full_name,omitempty"`
 	AvatarURL     *string                `json:"avatar_url,omitempty"`
+	Role          string                 `json:"role"`
 	Metadata      map[string]interface{} `json:"metadata,omitempty"`
 	Provider      string                 `json:"provider"`
 	ProviderID    *string                `json:"provider_id,omitempty"`
@@ -37,6 +38,7 @@ type AuthUserPublic struct {
 	PhoneVerified bool                   `json:"phone_verified"`
 	FullName      *string                `json:"full_name,omitempty"`
 	AvatarURL     *string                `json:"avatar_url,omitempty"`
+	Role          string                 `json:"role"`
 	Metadata      map[string]interface{} `json:"metadata,omitempty"`
 	Provider      string                 `json:"provider"`
 	LastSignIn    *time.Time             `json:"last_sign_in,omitempty"`
@@ -47,7 +49,7 @@ type AuthUserPublic struct {
 func (db *DB) GetAllAuthUsers(ctx context.Context) ([]AuthUserPublic, error) {
 	rows, err := db.Pool.Query(ctx,
 		`SELECT id, email, email_verified, phone, phone_verified, full_name, avatar_url, 
-		        provider, last_sign_in, created_at 
+		        COALESCE(role, 'user') as role, COALESCE(metadata, '{}'::jsonb) as metadata, provider, last_sign_in, created_at 
 		 FROM auth_users ORDER BY created_at DESC`,
 	)
 	if err != nil {
@@ -59,7 +61,7 @@ func (db *DB) GetAllAuthUsers(ctx context.Context) ([]AuthUserPublic, error) {
 	for rows.Next() {
 		var u AuthUserPublic
 		if err := rows.Scan(&u.ID, &u.Email, &u.EmailVerified, &u.Phone, &u.PhoneVerified,
-			&u.FullName, &u.AvatarURL, &u.Provider, &u.LastSignIn, &u.CreatedAt); err != nil {
+			&u.FullName, &u.AvatarURL, &u.Role, &u.Metadata, &u.Provider, &u.LastSignIn, &u.CreatedAt); err != nil {
 			return nil, err
 		}
 		users = append(users, u)
@@ -73,11 +75,11 @@ func (db *DB) GetAuthUserByID(ctx context.Context, id string) (*AuthUser, error)
 	var user AuthUser
 	err := db.Pool.QueryRow(ctx,
 		`SELECT id, email, password_hash, email_verified, phone, phone_verified, 
-		        full_name, avatar_url, provider, provider_id, last_sign_in, created_at, updated_at 
+		        full_name, avatar_url, COALESCE(role, 'user') as role, COALESCE(metadata, '{}'::jsonb) as metadata, provider, provider_id, last_sign_in, created_at, updated_at 
 		 FROM auth_users WHERE id = $1`,
 		id,
 	).Scan(&user.ID, &user.Email, &user.PasswordHash, &user.EmailVerified, &user.Phone,
-		&user.PhoneVerified, &user.FullName, &user.AvatarURL, &user.Provider,
+		&user.PhoneVerified, &user.FullName, &user.AvatarURL, &user.Role, &user.Metadata, &user.Provider,
 		&user.ProviderID, &user.LastSignIn, &user.CreatedAt, &user.UpdatedAt)
 
 	if err != nil {
@@ -196,12 +198,125 @@ func (db *DB) DeleteAuthUser(ctx context.Context, id string) error {
 	return err
 }
 
+// UpdateAuthUserFull updates an auth user with all fields including role and metadata
+func (db *DB) UpdateAuthUserFull(ctx context.Context, id string, email *string, password *string, fullName *string, phone *string, role *string, emailVerified *bool, metadata map[string]interface{}) error {
+	// Build dynamic update query
+	query := "UPDATE auth_users SET updated_at = NOW()"
+	args := []interface{}{}
+	argNum := 1
+
+	if email != nil {
+		query += fmt.Sprintf(", email = $%d", argNum)
+		args = append(args, *email)
+		argNum++
+	}
+
+	if password != nil && *password != "" {
+		hash, err := bcrypt.GenerateFromPassword([]byte(*password), 12)
+		if err != nil {
+			return err
+		}
+		query += fmt.Sprintf(", password_hash = $%d", argNum)
+		args = append(args, string(hash))
+		argNum++
+	}
+
+	if fullName != nil {
+		query += fmt.Sprintf(", full_name = $%d", argNum)
+		args = append(args, *fullName)
+		argNum++
+	}
+
+	if phone != nil {
+		query += fmt.Sprintf(", phone = $%d", argNum)
+		args = append(args, *phone)
+		argNum++
+	}
+
+	if role != nil {
+		query += fmt.Sprintf(", role = $%d", argNum)
+		args = append(args, *role)
+		argNum++
+	}
+
+	if emailVerified != nil {
+		query += fmt.Sprintf(", email_verified = $%d", argNum)
+		args = append(args, *emailVerified)
+		argNum++
+	}
+
+	if metadata != nil {
+		query += fmt.Sprintf(", metadata = $%d", argNum)
+		args = append(args, metadata)
+		argNum++
+	}
+
+	query += fmt.Sprintf(" WHERE id = $%d", argNum)
+	args = append(args, id)
+
+	_, err := db.Pool.Exec(ctx, query, args...)
+	return err
+}
+
 // UpdateAuthUserLastSignIn updates the last sign in time
 func (db *DB) UpdateAuthUserLastSignIn(ctx context.Context, id string) error {
 	_, err := db.Pool.Exec(ctx,
 		`UPDATE auth_users SET last_sign_in = NOW(), updated_at = NOW() WHERE id = $1`,
 		id)
 	return err
+}
+
+// BulkUpdateAuthUsers updates multiple users matching a filter
+func (db *DB) BulkUpdateAuthUsers(ctx context.Context, filterRole *string, filterEmailVerified *bool, updateRole *string, updateEmailVerified *bool, updateMetadata map[string]interface{}) (int, error) {
+	// Build WHERE clause
+	whereClause := "WHERE 1=1"
+	whereArgs := []interface{}{}
+	argNum := 1
+
+	if filterRole != nil {
+		whereClause += fmt.Sprintf(" AND role = $%d", argNum)
+		whereArgs = append(whereArgs, *filterRole)
+		argNum++
+	}
+
+	if filterEmailVerified != nil {
+		whereClause += fmt.Sprintf(" AND email_verified = $%d", argNum)
+		whereArgs = append(whereArgs, *filterEmailVerified)
+		argNum++
+	}
+
+	// Build SET clause
+	setClause := "SET updated_at = NOW()"
+	setArgs := []interface{}{}
+
+	if updateRole != nil {
+		setClause += fmt.Sprintf(", role = $%d", argNum)
+		setArgs = append(setArgs, *updateRole)
+		argNum++
+	}
+
+	if updateEmailVerified != nil {
+		setClause += fmt.Sprintf(", email_verified = $%d", argNum)
+		setArgs = append(setArgs, *updateEmailVerified)
+		argNum++
+	}
+
+	if updateMetadata != nil {
+		setClause += fmt.Sprintf(", metadata = $%d", argNum)
+		setArgs = append(setArgs, updateMetadata)
+		argNum++
+	}
+
+	// Combine args
+	allArgs := append(whereArgs, setArgs...)
+
+	query := fmt.Sprintf("UPDATE auth_users %s %s", setClause, whereClause)
+	result, err := db.Pool.Exec(ctx, query, allArgs...)
+	if err != nil {
+		return 0, err
+	}
+
+	return int(result.RowsAffected()), nil
 }
 
 // VerifyAuthUserPassword verifies a password against the stored hash

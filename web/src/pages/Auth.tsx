@@ -16,13 +16,17 @@ import {
   RefreshCw,
   UserPlus,
   Mail,
-  CheckCircle
+  CheckCircle,
+  ChevronDown,
+  ChevronUp,
+  Phone,
+  Edit
 } from 'lucide-react'
 
 const API_BASE = '/api/v1'
 
 // Code snippets for different languages
-const getCodeSnippets = (baseUrl: string, anonKey: string) => ({
+const getCodeSnippets = (baseUrl: string, anonKey: string, serviceKey: string) => ({
   javascript: {
     name: 'JavaScript',
     signup: `// Sign up new user
@@ -156,7 +160,67 @@ const resetResponse = await fetch('${baseUrl}/api/v1/auth/v1/reset-password', {
     token: 'TOKEN_FROM_EMAIL_LINK',
     new_password: 'newSecurePassword123'
   })
-});`
+});`,
+
+    updateUser: `// Update a single user
+// Use SERVICE_KEY for external automations (n8n, scripts)
+const SERVICE_KEY = '${serviceKey}';
+
+const response = await fetch('${baseUrl}/api/v1/auth/v1/users/{USER_ID}', {
+  method: 'PUT',
+  headers: { 
+    'Content-Type': 'application/json',
+    'apikey': SERVICE_KEY  // Full admin access
+  },
+  body: JSON.stringify({
+    role: 'premium',           // optional
+    metadata: {                // optional - custom JSON data
+      plan: 'pro',
+      company: 'Acme Inc'
+    },
+    email_verified: true,      // optional
+    full_name: 'John Doe',     // optional
+    phone: '+1234567890'       // optional
+  })
+});
+
+const { user } = await response.json();`,
+
+    bulkUpdate: `// Bulk update users
+// Use SERVICE_KEY for external automations (n8n, scripts)
+const SERVICE_KEY = '${serviceKey}';
+
+// Option 1: Update specific users by ID
+const response = await fetch('${baseUrl}/api/v1/auth/v1/users/bulk', {
+  method: 'POST',
+  headers: { 
+    'Content-Type': 'application/json',
+    'apikey': SERVICE_KEY  // Full admin access
+  },
+  body: JSON.stringify({
+    users: [
+      { id: 'uuid-1', role: 'premium', metadata: { plan: 'pro' } },
+      { id: 'uuid-2', role: 'premium', metadata: { plan: 'pro' } },
+      { id: 'uuid-3', role: 'vip', email_verified: true }
+    ]
+  })
+});
+
+// Option 2: Update all users matching a filter
+const response2 = await fetch('${baseUrl}/api/v1/auth/v1/users/bulk', {
+  method: 'POST',
+  headers: { 
+    'Content-Type': 'application/json',
+    'apikey': SERVICE_KEY
+  },
+  body: JSON.stringify({
+    filter: { role: 'user' },           // find all users with role 'user'
+    update: { role: 'premium' }         // change their role to 'premium'
+  })
+});
+
+const { updated, message } = await response.json();
+// { updated: 150, message: "Updated 150 users" }`
   },
 
   python: {
@@ -258,7 +322,47 @@ requests.post(
         'token': 'TOKEN_FROM_EMAIL',
         'new_password': 'newSecurePassword123'
     }
-)`
+)`,
+
+    updateUser: `# Update a single user
+SERVICE_KEY = '${serviceKey}'
+
+response = requests.put(
+    '${baseUrl}/api/v1/auth/v1/users/{USER_ID}',
+    headers={'apikey': SERVICE_KEY},
+    json={
+        'role': 'premium',
+        'metadata': {'plan': 'pro', 'company': 'Acme Inc'},
+        'email_verified': True
+    }
+)
+user = response.json()['user']`,
+
+    bulkUpdate: `# Bulk update users
+SERVICE_KEY = '${serviceKey}'
+
+# Option 1: Update specific users by ID
+response = requests.post(
+    '${baseUrl}/api/v1/auth/v1/users/bulk',
+    headers={'apikey': SERVICE_KEY},
+    json={
+        'users': [
+            {'id': 'uuid-1', 'role': 'premium'},
+            {'id': 'uuid-2', 'role': 'premium'}
+        ]
+    }
+)
+
+# Option 2: Update all users matching a filter
+response = requests.post(
+    '${baseUrl}/api/v1/auth/v1/users/bulk',
+    headers={'apikey': SERVICE_KEY},
+    json={
+        'filter': {'role': 'user'},
+        'update': {'role': 'premium'}
+    }
+)
+print(f"Updated {response.json()['updated']} users")`
   },
 
   curl: {
@@ -314,7 +418,25 @@ curl -X POST ${baseUrl}/api/v1/auth/v1/forgot-password \\
 curl -X POST ${baseUrl}/api/v1/auth/v1/reset-password \\
   -H "Content-Type: application/json" \\
   -H "apikey: ${anonKey}" \\
-  -d '{"token": "TOKEN_FROM_EMAIL", "new_password": "newPassword123"}'`
+  -d '{"token": "TOKEN_FROM_EMAIL", "new_password": "newPassword123"}'`,
+
+    updateUser: `# Update a single user
+curl -X PUT ${baseUrl}/api/v1/auth/v1/users/USER_ID \\
+  -H "Content-Type: application/json" \\
+  -H "apikey: ${serviceKey}" \\
+  -d '{"role": "premium", "metadata": {"plan": "pro"}}'`,
+
+    bulkUpdate: `# Bulk update - Option 1: Update specific users by ID
+curl -X POST ${baseUrl}/api/v1/auth/v1/users/bulk \\
+  -H "Content-Type: application/json" \\
+  -H "apikey: ${serviceKey}" \\
+  -d '{"users": [{"id": "uuid-1", "role": "premium"}, {"id": "uuid-2", "role": "premium"}]}'
+
+# Bulk update - Option 2: Update all users matching a filter
+curl -X POST ${baseUrl}/api/v1/auth/v1/users/bulk \\
+  -H "Content-Type: application/json" \\
+  -H "apikey: ${serviceKey}" \\
+  -d '{"filter": {"role": "user"}, "update": {"role": "premium"}}'`
   },
 
   go: {
@@ -460,7 +582,38 @@ resetBody, _ := json.Marshal(map[string]string{
 req, _ = http.NewRequest("POST", "${baseUrl}/api/v1/auth/v1/reset-password", bytes.NewBuffer(resetBody))
 req.Header.Set("Content-Type", "application/json")
 req.Header.Set("apikey", ANON_KEY)
-client.Do(req)`
+client.Do(req)`,
+
+    updateUser: `// Update a single user
+SERVICE_KEY := "${serviceKey}"
+
+body, _ := json.Marshal(map[string]interface{}{
+    "role": "premium",
+    "metadata": map[string]string{"plan": "pro"},
+})
+
+req, _ := http.NewRequest("PUT", "${baseUrl}/api/v1/auth/v1/users/USER_ID", bytes.NewBuffer(body))
+req.Header.Set("Content-Type", "application/json")
+req.Header.Set("apikey", SERVICE_KEY)
+
+client := &http.Client{}
+client.Do(req)`,
+
+    bulkUpdate: `// Bulk update users by filter
+SERVICE_KEY := "${serviceKey}"
+
+body, _ := json.Marshal(map[string]interface{}{
+    "filter": map[string]string{"role": "user"},
+    "update": map[string]string{"role": "premium"},
+})
+
+req, _ := http.NewRequest("POST", "${baseUrl}/api/v1/auth/v1/users/bulk", bytes.NewBuffer(body))
+req.Header.Set("Content-Type", "application/json")
+req.Header.Set("apikey", SERVICE_KEY)
+
+client := &http.Client{}
+resp, _ := client.Do(req)
+// Response: {"updated": 150, "message": "Updated 150 users"}`
   },
 
   php: {
@@ -615,6 +768,44 @@ curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode([
     'new_password' => 'newPassword123'
 ]));
 curl_exec($ch);
+curl_close($ch);`,
+
+    updateUser: `<?php
+// Update a single user
+$SERVICE_KEY = '${serviceKey}';
+
+$ch = curl_init('${baseUrl}/api/v1/auth/v1/users/USER_ID');
+curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'PUT');
+curl_setopt($ch, CURLOPT_HTTPHEADER, [
+    'Content-Type: application/json',
+    'apikey: ' . $SERVICE_KEY
+]);
+curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode([
+    'role' => 'premium',
+    'metadata' => ['plan' => 'pro']
+]));
+$response = curl_exec($ch);
+curl_close($ch);`,
+
+    bulkUpdate: `<?php
+// Bulk update users by filter
+$SERVICE_KEY = '${serviceKey}';
+
+$ch = curl_init('${baseUrl}/api/v1/auth/v1/users/bulk');
+curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+curl_setopt($ch, CURLOPT_POST, true);
+curl_setopt($ch, CURLOPT_HTTPHEADER, [
+    'Content-Type: application/json',
+    'apikey: ' . $SERVICE_KEY
+]);
+curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode([
+    'filter' => ['role' => 'user'],
+    'update' => ['role' => 'premium']
+]));
+$response = curl_exec($ch);
+$data = json_decode($response, true);
+echo "Updated " . $data['updated'] . " users";
 curl_close($ch);`
   }
 })
@@ -675,23 +866,47 @@ async function deleteUser(id: string) {
   return res.json()
 }
 
+async function updateUser(id: string, data: Partial<User>) {
+  const token = getAuthToken()
+  if (!token) throw new Error('Not authenticated')
+
+  const res = await fetch(`${API_BASE}/auth/users/${id}`, {
+    method: 'PUT',
+    headers: { 
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}` 
+    },
+    body: JSON.stringify(data)
+  })
+  if (!res.ok) {
+    const err = await res.json()
+    throw new Error(err.error || 'Failed to update user')
+  }
+  return res.json()
+}
+
 interface User {
   id: string
   email: string
   email_verified: boolean
   full_name?: string
+  phone?: string
+  role?: string
+  metadata?: Record<string, any>
   provider: string
   last_sign_in?: string
   created_at: string
 }
 
 type TabType = 'users' | 'docs'
-type DocSection = 'signup' | 'signin' | 'magiclink' | 'authHeader' | 'refresh' | 'signout' | 'verify' | 'forgotPassword'
+type DocSection = 'signup' | 'signin' | 'magiclink' | 'authHeader' | 'refresh' | 'signout' | 'verify' | 'forgotPassword' | 'updateUser' | 'bulkUpdate'
 
 export default function Auth() {
   const queryClient = useQueryClient()
   const [activeTab, setActiveTab] = useState<TabType>('users')
   const [showCreate, setShowCreate] = useState(false)
+  const [editingUser, setEditingUser] = useState<User | null>(null)
+  const [expandedUsers, setExpandedUsers] = useState<Set<string>>(new Set())
   const [search, setSearch] = useState('')
   const [selectedLang, setSelectedLang] = useState('javascript')
   const [selectedSection, setSelectedSection] = useState<DocSection>('signup')
@@ -721,7 +936,7 @@ export default function Auth() {
 
   const anonKey = projectData?.anon_key || 'YOUR_ANON_KEY'
   const serviceKey = projectData?.service_key || 'YOUR_SERVICE_KEY'
-  const snippets = getCodeSnippets(baseUrl, anonKey)
+  const snippets = getCodeSnippets(baseUrl, anonKey, serviceKey)
 
   const { data, isLoading } = useQuery({
     queryKey: ['auth-users'],
@@ -747,6 +962,14 @@ export default function Auth() {
     },
   })
 
+  const updateMutation = useMutation({
+    mutationFn: ({ id, data }: { id: string; data: Partial<User> }) => updateUser(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['auth-users'] })
+      setEditingUser(null)
+    },
+  })
+
   const copyToClipboard = (code: string, id: string) => {
     navigator.clipboard.writeText(code)
     setCopiedCode(id)
@@ -768,6 +991,8 @@ export default function Auth() {
     { id: 'authHeader' as const, name: 'Auth Headers', icon: Code },
     { id: 'refresh' as const, name: 'Refresh Token', icon: RefreshCw },
     { id: 'signout' as const, name: 'Sign Out', icon: LogOut },
+    { id: 'updateUser' as const, name: 'Update User', icon: UsersIcon },
+    { id: 'bulkUpdate' as const, name: 'Bulk Update', icon: UsersIcon },
   ]
 
   return (
@@ -922,6 +1147,17 @@ export default function Auth() {
             </div>
           )}
 
+          {/* Edit User Modal */}
+          {editingUser && (
+            <EditUserModal
+              user={editingUser}
+              onClose={() => setEditingUser(null)}
+              onSave={(data) => updateMutation.mutate({ id: editingUser.id, data })}
+              isLoading={updateMutation.isPending}
+              error={updateMutation.isError ? (updateMutation.error as Error).message : undefined}
+            />
+          )}
+
           {/* Users List */}
           <div className="bg-white rounded-xl border border-gray-200">
             {isLoading ? (
@@ -947,7 +1183,7 @@ export default function Auth() {
                         User
                       </th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Provider
+                        Role
                       </th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                         Status
@@ -961,98 +1197,161 @@ export default function Auth() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200">
-                    {filteredUsers.map((user) => (
-                      <tr key={user.id} className="hover:bg-gray-50">
-                        <td className="px-6 py-4">
-                          <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center">
-                              <span className="text-blue-600 font-medium">
-                                {(user.full_name || user.email).charAt(0).toUpperCase()}
+                    {filteredUsers.map((user) => {
+                      const isExpanded = expandedUsers.has(user.id)
+                      const toggleExpand = () => {
+                        const newSet = new Set(expandedUsers)
+                        if (isExpanded) {
+                          newSet.delete(user.id)
+                        } else {
+                          newSet.add(user.id)
+                        }
+                        setExpandedUsers(newSet)
+                      }
+                      return (
+                        <>
+                          <tr key={user.id} className="hover:bg-gray-50 cursor-pointer" onClick={toggleExpand}>
+                            <td className="px-6 py-4">
+                              <div className="flex items-center gap-3">
+                                <button className="text-gray-400 hover:text-gray-600">
+                                  {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                                </button>
+                                <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center">
+                                  <span className="text-blue-600 font-medium">
+                                    {(user.full_name || user.email).charAt(0).toUpperCase()}
+                                  </span>
+                                </div>
+                                <div>
+                                  <p className="font-medium text-gray-900">{user.full_name || user.email}</p>
+                                  <p className="text-sm text-gray-500">{user.email}</p>
+                                </div>
+                              </div>
+                            </td>
+                            <td className="px-6 py-4">
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-purple-100 text-purple-700">
+                                {user.role || 'user'}
                               </span>
-                            </div>
-                            <div>
-                              <p className="font-medium text-gray-900">{user.full_name || user.email}</p>
-                              <p className="text-sm text-gray-500">{user.email}</p>
-                            </div>
-                          </div>
-                        </td>
-                        <td className="px-6 py-4">
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-700">
-                            <Mail className="w-3 h-3" />
-                            {user.provider}
-                          </span>
-                        </td>
-                        <td className="px-6 py-4">
-                          {user.email_verified ? (
-                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 text-green-700">
-                              <CheckCircle className="w-3 h-3" />
-                              Verified
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-700">
-                              Pending
-                            </span>
+                            </td>
+                            <td className="px-6 py-4">
+                              {user.email_verified ? (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-green-100 text-green-700">
+                                  <CheckCircle className="w-3 h-3" />
+                                  Verified
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-700">
+                                  Pending
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-6 py-4 text-sm text-gray-500">
+                              {user.last_sign_in 
+                                ? new Date(user.last_sign_in).toLocaleString()
+                                : 'Never'
+                              }
+                            </td>
+                            <td className="px-6 py-4 text-right" onClick={(e) => e.stopPropagation()}>
+                              <div className="flex items-center justify-end gap-1">
+                                {!user.email_verified && (
+                                  <button
+                                    onClick={async () => {
+                                      await fetch(`${API_BASE}/auth/v1/resend`, {
+                                        method: 'POST',
+                                        headers: { 
+                                          'Content-Type': 'application/json',
+                                          'apikey': anonKey
+                                        },
+                                        body: JSON.stringify({ email: user.email })
+                                      })
+                                      alert('Verification email sent!')
+                                    }}
+                                    className="p-2 text-gray-500 hover:text-green-600 hover:bg-green-50 rounded transition-colors"
+                                    title="Resend verification email"
+                                  >
+                                    <CheckCircle className="w-4 h-4" />
+                                  </button>
+                                )}
+                                <button
+                                  onClick={async () => {
+                                    await fetch(`${API_BASE}/auth/v1/magiclink`, {
+                                      method: 'POST',
+                                      headers: { 
+                                        'Content-Type': 'application/json',
+                                        'apikey': anonKey
+                                      },
+                                      body: JSON.stringify({ email: user.email })
+                                    })
+                                    alert('Magic link sent!')
+                                  }}
+                                  className="p-2 text-gray-500 hover:text-purple-600 hover:bg-purple-50 rounded transition-colors"
+                                  title="Send magic link"
+                                >
+                                  <Mail className="w-4 h-4" />
+                                </button>
+                                <button
+                                  onClick={() => setEditingUser(user)}
+                                  className="p-2 text-gray-500 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
+                                  title="Edit user"
+                                >
+                                  <Edit className="w-4 h-4" />
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    if (confirm(`Delete user "${user.email}"?`)) {
+                                      deleteMutation.mutate(user.id)
+                                    }
+                                  }}
+                                  className="p-2 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+                                  title="Delete user"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                          {isExpanded && (
+                            <tr key={`${user.id}-details`} className="bg-gray-50">
+                              <td colSpan={5} className="px-6 py-4">
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                                  <div>
+                                    <p className="text-gray-500 text-xs uppercase mb-1">User ID</p>
+                                    <p className="font-mono text-xs text-gray-700 break-all">{user.id}</p>
+                                  </div>
+                                  <div>
+                                    <p className="text-gray-500 text-xs uppercase mb-1">Phone</p>
+                                    <p className="text-gray-900 flex items-center gap-1">
+                                      {user.phone ? (
+                                        <><Phone className="w-3 h-3" /> {user.phone}</>
+                                      ) : (
+                                        <span className="text-gray-400">Not set</span>
+                                      )}
+                                    </p>
+                                  </div>
+                                  <div>
+                                    <p className="text-gray-500 text-xs uppercase mb-1">Provider</p>
+                                    <p className="text-gray-900">{user.provider}</p>
+                                  </div>
+                                  <div>
+                                    <p className="text-gray-500 text-xs uppercase mb-1">Created</p>
+                                    <p className="text-gray-900">{new Date(user.created_at).toLocaleDateString()}</p>
+                                  </div>
+                                  <div className="col-span-2 md:col-span-4">
+                                    <p className="text-gray-500 text-xs uppercase mb-1">Metadata</p>
+                                    {user.metadata && Object.keys(user.metadata).length > 0 ? (
+                                      <pre className="bg-gray-100 p-2 rounded text-xs overflow-x-auto">
+                                        {JSON.stringify(user.metadata, null, 2)}
+                                      </pre>
+                                    ) : (
+                                      <p className="text-gray-400">No metadata</p>
+                                    )}
+                                  </div>
+                                </div>
+                              </td>
+                            </tr>
                           )}
-                        </td>
-                        <td className="px-6 py-4 text-sm text-gray-500">
-                          {user.last_sign_in 
-                            ? new Date(user.last_sign_in).toLocaleString()
-                            : 'Never'
-                          }
-                        </td>
-                        <td className="px-6 py-4 text-right">
-                          <div className="flex items-center justify-end gap-1">
-                            {!user.email_verified && (
-                              <button
-                                onClick={async () => {
-                                  await fetch(`${API_BASE}/auth/v1/resend`, {
-                                    method: 'POST',
-                                    headers: { 
-                                      'Content-Type': 'application/json',
-                                      'apikey': anonKey
-                                    },
-                                    body: JSON.stringify({ email: user.email })
-                                  })
-                                  alert('Verification email sent!')
-                                }}
-                                className="p-2 text-gray-500 hover:text-green-600 hover:bg-green-50 rounded transition-colors"
-                                title="Resend verification email"
-                              >
-                                <CheckCircle className="w-4 h-4" />
-                              </button>
-                            )}
-                            <button
-                              onClick={async () => {
-                                await fetch(`${API_BASE}/auth/v1/magiclink`, {
-                                  method: 'POST',
-                                  headers: { 
-                                    'Content-Type': 'application/json',
-                                    'apikey': anonKey
-                                  },
-                                  body: JSON.stringify({ email: user.email })
-                                })
-                                alert('Magic link sent!')
-                              }}
-                              className="p-2 text-gray-500 hover:text-purple-600 hover:bg-purple-50 rounded transition-colors"
-                              title="Send magic link"
-                            >
-                              <Mail className="w-4 h-4" />
-                            </button>
-                            <button
-                              onClick={() => {
-                                if (confirm(`Delete user "${user.email}"?`)) {
-                                  deleteMutation.mutate(user.id)
-                                }
-                              }}
-                              className="p-2 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
-                              title="Delete user"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
+                        </>
+                      )
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -1439,9 +1738,253 @@ export default function Auth() {
                 </div>
               </div>
             )}
+
+            {/* Update User Section */}
+            {selectedSection === 'updateUser' && (
+              <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+                <div className="px-6 py-4 border-b border-gray-200">
+                  <h2 className="text-lg font-semibold text-gray-900">Update User</h2>
+                  <p className="text-sm text-gray-600 mt-1">
+                    Update a single user's role, metadata, and other fields. Requires admin authentication.
+                  </p>
+                </div>
+                <div className="p-6">
+                  <div className="mb-4">
+                    <span className="inline-flex items-center px-2.5 py-1 rounded text-xs font-medium bg-blue-100 text-blue-700">
+                      PUT
+                    </span>
+                    <code className="ml-2 text-sm text-gray-700">/api/v1/auth/v1/users/:id</code>
+                  </div>
+                  <div className="relative">
+                    <pre className="bg-gray-900 text-gray-100 p-4 rounded-lg text-sm overflow-x-auto">
+                      <code>{snippets[selectedLang as keyof typeof snippets].updateUser}</code>
+                    </pre>
+                    <button
+                      onClick={() => copyToClipboard(snippets[selectedLang as keyof typeof snippets].updateUser, 'updateUser')}
+                      className="absolute top-2 right-2 p-2 bg-gray-800 hover:bg-gray-700 rounded text-gray-400 hover:text-white transition-colors"
+                    >
+                      {copiedCode === 'updateUser' ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                    </button>
+                  </div>
+                  <div className="mt-4 p-4 bg-purple-50 rounded-lg">
+                    <h4 className="text-sm font-medium text-purple-900 mb-2">Available Fields</h4>
+                    <ul className="text-xs text-purple-800 space-y-1">
+                      <li>• <code className="bg-purple-100 px-1 rounded">role</code> - User role for segmentation (e.g., "premium", "admin")</li>
+                      <li>• <code className="bg-purple-100 px-1 rounded">metadata</code> - Custom JSON data for filtering</li>
+                      <li>• <code className="bg-purple-100 px-1 rounded">email_verified</code> - Boolean</li>
+                      <li>• <code className="bg-purple-100 px-1 rounded">full_name</code> - User's display name</li>
+                      <li>• <code className="bg-purple-100 px-1 rounded">phone</code> - Phone number</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Bulk Update Section */}
+            {selectedSection === 'bulkUpdate' && (
+              <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+                <div className="px-6 py-4 border-b border-gray-200">
+                  <h2 className="text-lg font-semibold text-gray-900">Bulk Update</h2>
+                  <p className="text-sm text-gray-600 mt-1">
+                    Update thousands of users at once. Perfect for mass role changes or metadata updates.
+                  </p>
+                </div>
+                <div className="p-6">
+                  <div className="mb-4">
+                    <span className="inline-flex items-center px-2.5 py-1 rounded text-xs font-medium bg-green-100 text-green-700">
+                      POST
+                    </span>
+                    <code className="ml-2 text-sm text-gray-700">/api/v1/auth/v1/users/bulk</code>
+                  </div>
+                  <div className="relative">
+                    <pre className="bg-gray-900 text-gray-100 p-4 rounded-lg text-sm overflow-x-auto">
+                      <code>{snippets[selectedLang as keyof typeof snippets].bulkUpdate}</code>
+                    </pre>
+                    <button
+                      onClick={() => copyToClipboard(snippets[selectedLang as keyof typeof snippets].bulkUpdate, 'bulkUpdate')}
+                      className="absolute top-2 right-2 p-2 bg-gray-800 hover:bg-gray-700 rounded text-gray-400 hover:text-white transition-colors"
+                    >
+                      {copiedCode === 'bulkUpdate' ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                    </button>
+                  </div>
+                  <div className="mt-4 p-4 bg-green-50 rounded-lg">
+                    <h4 className="text-sm font-medium text-green-900 mb-2">Two Options</h4>
+                    <div className="text-xs text-green-800 space-y-2">
+                      <div>
+                        <strong>Option 1: By User IDs</strong>
+                        <p>Send an array of users with their IDs and the fields to update.</p>
+                      </div>
+                      <div>
+                        <strong>Option 2: By Filter</strong>
+                        <p>Update ALL users matching a filter (e.g., all users with role "user" → "premium").</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+interface EditUserModalProps {
+  user: User
+  onClose: () => void
+  onSave: (data: Partial<User>) => void
+  isLoading: boolean
+  error?: string
+}
+
+function EditUserModal({ user, onClose, onSave, isLoading, error }: EditUserModalProps) {
+  const [fullName, setFullName] = useState(user.full_name || '')
+  const [phone, setPhone] = useState(user.phone || '')
+  const [role, setRole] = useState(user.role || 'user')
+  const [emailVerified, setEmailVerified] = useState(user.email_verified)
+  const [metadataStr, setMetadataStr] = useState(
+    user.metadata ? JSON.stringify(user.metadata, null, 2) : '{}'
+  )
+  const [metadataError, setMetadataError] = useState<string | null>(null)
+
+  const handleSave = () => {
+    let metadata: Record<string, any> = {}
+    try {
+      metadata = JSON.parse(metadataStr)
+      setMetadataError(null)
+    } catch {
+      setMetadataError('Invalid JSON format')
+      return
+    }
+
+    onSave({
+      full_name: fullName || undefined,
+      phone: phone || undefined,
+      role,
+      email_verified: emailVerified,
+      metadata,
+    })
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+          <div>
+            <h2 className="text-lg font-semibold">Edit User</h2>
+            <p className="text-sm text-gray-500">{user.email}</p>
+          </div>
+          <button onClick={onClose} className="text-gray-500 hover:text-gray-700">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="p-6 space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Full Name</label>
+              <input
+                type="text"
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                placeholder="John Doe"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Phone</label>
+              <input
+                type="text"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                placeholder="+1234567890"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
+            <input
+              type="text"
+              value={role}
+              onChange={(e) => setRole(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+              placeholder="user, premium, admin, etc."
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              Use this field to segment users for notifications (e.g., "premium", "admin", "beta")
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Metadata (JSON)
+            </label>
+            <textarea
+              value={metadataStr}
+              onChange={(e) => setMetadataStr(e.target.value)}
+              rows={5}
+              className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none font-mono text-sm ${
+                metadataError ? 'border-red-300' : 'border-gray-300'
+              }`}
+              placeholder='{"plan": "pro", "company": "Acme Inc"}'
+            />
+            {metadataError && (
+              <p className="text-xs text-red-600 mt-1">{metadataError}</p>
+            )}
+            <p className="text-xs text-gray-500 mt-1">
+              Store custom data. Use in notification filters: <code className="bg-gray-100 px-1 rounded">{"filter: { metadata: { plan: 'pro' } }"}</code>
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              id="editEmailVerified"
+              checked={emailVerified}
+              onChange={(e) => setEmailVerified(e.target.checked)}
+              className="rounded"
+            />
+            <label htmlFor="editEmailVerified" className="text-sm text-gray-700">
+              Email verified
+            </label>
+          </div>
+
+          <div className="p-3 bg-gray-50 rounded-lg">
+            <p className="text-xs text-gray-600">
+              <strong>User ID:</strong> <code className="bg-gray-200 px-1 rounded">{user.id}</code>
+            </p>
+            <p className="text-xs text-gray-600 mt-1">
+              <strong>Created:</strong> {new Date(user.created_at).toLocaleString()}
+            </p>
+          </div>
+
+          {error && (
+            <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
+              {error}
+            </div>
+          )}
+        </div>
+
+        <div className="flex justify-end gap-3 px-6 py-4 border-t border-gray-200">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={isLoading}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            {isLoading && <Loader2 className="w-4 h-4 animate-spin" />}
+            Save Changes
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

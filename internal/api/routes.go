@@ -11,7 +11,7 @@ import (
 	"github.com/rapibase/rapibase/internal/database"
 )
 
-func SetupRoutes(app *fiber.App, db *database.DB, cfg *config.Config) {
+func SetupRoutes(app *fiber.App, db *database.DB, cfg *config.Config) *WebhookDispatcher {
 	// Initialize components
 	jwtManager := auth.NewJWTManagerWithExpiry(cfg.JWTSecret, cfg.JWTExpiry)
 	smtpClient := auth.NewSMTPClient(cfg)
@@ -19,11 +19,16 @@ func SetupRoutes(app *fiber.App, db *database.DB, cfg *config.Config) {
 	apiKeyMiddleware := middleware.NewAPIKeyMiddleware(cfg, jwtManager)
 	rateLimiter := middleware.NewRateLimiter(10, time.Minute) // 10 requests per minute for auth
 
+	// Initialize webhook dispatcher
+	webhookDispatcher := NewWebhookDispatcher(db)
+
 	// Initialize handlers
 	authHandler := handlers.NewAuthHandler(db, jwtManager, smtpClient, cfg)
 	authUsersHandler := handlers.NewAuthUsersHandler(db, jwtManager, smtpClient, cfg)
-	tablesHandler := handlers.NewTablesHandler(db)
+	tablesHandler := handlers.NewTablesHandler(db, webhookDispatcher)
 	queryHandler := handlers.NewQueryHandler(db)
+	webhooksHandler := handlers.NewWebhooksHandler(db)
+	pushHandler := handlers.NewPushHandler(db)
 
 	// API v1
 	api := app.Group("/api/v1")
@@ -81,6 +86,13 @@ func SetupRoutes(app *fiber.App, db *database.DB, cfg *config.Config) {
 	authPublic.Post("/forgot-password", rateLimiter.Limit(), authUsersHandler.ForgotPassword)
 	authPublic.Post("/reset-password", authUsersHandler.ResetPassword)
 
+	// User management (SERVICE_KEY only - for external automations)
+	authPublic.Get("/users", authUsersHandler.ListUsersAPI)
+	authPublic.Post("/users", authUsersHandler.CreateUserAPI)
+	authPublic.Put("/users/:id", authUsersHandler.UpdateUserAPI)
+	authPublic.Delete("/users/:id", authUsersHandler.DeleteUserAPI)
+	authPublic.Post("/users/bulk", authUsersHandler.BulkUpdateUsersAPI)
+
 	// ============================================
 	// REST API - Data access for third-party apps
 	// - ANON_KEY: Requires JWT (authenticated users only)
@@ -118,11 +130,56 @@ func SetupRoutes(app *fiber.App, db *database.DB, cfg *config.Config) {
 	protected.Post("/import/json/:table", queryHandler.ImportJSON)
 	protected.Get("/export/:table", queryHandler.ExportTable)
 
-	// Auth users management (admin only)
+	// Auth users management (admin panel - uses JWT)
+	// Note: API endpoints are in /auth/v1/users (uses SERVICE_KEY)
 	protected.Get("/auth/users", authUsersHandler.ListUsers)
 	protected.Post("/auth/users", authUsersHandler.CreateUser)
 	protected.Put("/auth/users/:id", authUsersHandler.UpdateUser)
 	protected.Delete("/auth/users/:id", authUsersHandler.DeleteUser)
+	protected.Post("/auth/users/bulk", authUsersHandler.BulkUpdateUsers)
+
+	// ============================================
+	// WEBHOOKS (admin only)
+	// ============================================
+	protected.Get("/webhooks", webhooksHandler.ListWebhooks)
+	protected.Post("/webhooks", webhooksHandler.CreateWebhook)
+	protected.Get("/webhooks/events", webhooksHandler.GetAvailableEvents)
+	protected.Get("/webhooks/logs", webhooksHandler.ListWebhookLogs)
+	protected.Get("/webhooks/:id", webhooksHandler.GetWebhook)
+	protected.Put("/webhooks/:id", webhooksHandler.UpdateWebhook)
+	protected.Delete("/webhooks/:id", webhooksHandler.DeleteWebhook)
+	protected.Patch("/webhooks/:id/toggle", webhooksHandler.ToggleWebhook)
+
+	// ============================================
+	// PUSH NOTIFICATIONS (admin only)
+	// ============================================
+	protected.Get("/push/config", pushHandler.GetPushConfigs)
+	protected.Post("/push/config/web", pushHandler.SetupWebPush)
+	protected.Post("/push/config/ios", pushHandler.SetupIOSPush)
+	protected.Post("/push/config/android", pushHandler.SetupAndroidPush)
+	protected.Patch("/push/config/:platform/toggle", pushHandler.TogglePushConfig)
+	protected.Post("/push/send", pushHandler.SendNotification)
+	protected.Get("/push/notifications", pushHandler.ListNotifications)
+
+	// ============================================
+	// PUSH - Client endpoints for third-party apps
+	// Requires API key + JWT (authenticated users)
+	// ============================================
+	pushAPI := api.Group("/push/v1", apiKeyMiddleware.RequireAPIKey())
+	pushAPI.Get("/vapid", pushHandler.GetVAPIDPublicKey)
+	pushAPI.Post("/subscribe", pushHandler.Subscribe)
+	pushAPI.Delete("/subscribe", pushHandler.Unsubscribe)
+	pushAPI.Get("/notifications", pushHandler.GetNotifications)
+	pushAPI.Put("/notifications/:id/read", pushHandler.MarkRead)
+	pushAPI.Put("/notifications/read-all", pushHandler.MarkAllRead)
+
+	// ============================================
+	// PUSH - API endpoint for automation (SERVICE_KEY only)
+	// Use this from n8n, webhooks, or other automation tools
+	// ============================================
+	pushAPI.Post("/send", pushHandler.SendNotification)
+
+	return webhookDispatcher
 }
 
 // ErrorHandler handles errors globally

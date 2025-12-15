@@ -1,17 +1,26 @@
 package handlers
 
 import (
+	"context"
+
 	"github.com/gofiber/fiber/v2"
 	"github.com/rapibase/rapibase/internal/database"
 	"github.com/rapibase/rapibase/internal/models"
+	"github.com/rapibase/rapibase/internal/webhooks"
 )
 
-type TablesHandler struct {
-	db *database.DB
+// WebhookDispatcher interface for dispatching webhook events
+type WebhookDispatcher interface {
+	Dispatch(ctx context.Context, eventType, tableName string, data, oldData map[string]interface{})
 }
 
-func NewTablesHandler(db *database.DB) *TablesHandler {
-	return &TablesHandler{db: db}
+type TablesHandler struct {
+	db                *database.DB
+	webhookDispatcher WebhookDispatcher
+}
+
+func NewTablesHandler(db *database.DB, webhookDispatcher WebhookDispatcher) *TablesHandler {
+	return &TablesHandler{db: db, webhookDispatcher: webhookDispatcher}
 }
 
 // ListTables returns all tables
@@ -153,6 +162,11 @@ func (h *TablesHandler) InsertRow(c *fiber.Ctx) error {
 		})
 	}
 
+	// Dispatch webhook event
+	if h.webhookDispatcher != nil {
+		h.webhookDispatcher.Dispatch(c.Context(), webhooks.EventInsert, tableName, row, nil)
+	}
+
 	return c.Status(fiber.StatusCreated).JSON(row)
 }
 
@@ -174,11 +188,22 @@ func (h *TablesHandler) UpdateRow(c *fiber.Ctx) error {
 		})
 	}
 
+	// Get old data BEFORE update for webhook
+	var oldData map[string]interface{}
+	if h.webhookDispatcher != nil {
+		oldData, _ = h.db.GetRowByID(c.Context(), tableName, id)
+	}
+
 	row, err := h.db.UpdateRow(c.Context(), tableName, id, data)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error": err.Error(),
 		})
+	}
+
+	// Dispatch webhook event with old data
+	if h.webhookDispatcher != nil {
+		h.webhookDispatcher.Dispatch(c.Context(), webhooks.EventUpdate, tableName, row, oldData)
 	}
 
 	return c.JSON(row)
@@ -195,10 +220,24 @@ func (h *TablesHandler) DeleteRow(c *fiber.Ctx) error {
 		})
 	}
 
+	// Get row data before deletion for webhook
+	var deletedData map[string]interface{}
+	if h.webhookDispatcher != nil {
+		deletedData, _ = h.db.GetRowByID(c.Context(), tableName, id)
+	}
+
 	if err := h.db.DeleteRow(c.Context(), tableName, id); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error": err.Error(),
 		})
+	}
+
+	// Dispatch webhook event
+	if h.webhookDispatcher != nil {
+		if deletedData == nil {
+			deletedData = map[string]interface{}{"id": id}
+		}
+		h.webhookDispatcher.Dispatch(c.Context(), webhooks.EventDelete, tableName, deletedData, nil)
 	}
 
 	return c.JSON(fiber.Map{

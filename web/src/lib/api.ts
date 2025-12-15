@@ -170,3 +170,108 @@ export const importExport = {
     }).then((res) => res.blob())
   },
 }
+
+// Webhooks
+export const webhooks = {
+  list: () => request<{ webhooks: any[] }>('/webhooks'),
+
+  getEvents: () => request<{ events: string[] }>('/webhooks/events'),
+
+  getLogs: (webhookId?: number, success?: boolean, limit = 50) => {
+    const params = new URLSearchParams({ limit: String(limit) })
+    if (webhookId) params.set('webhook_id', String(webhookId))
+    if (success !== undefined) params.set('success', String(success))
+    return request<{ logs: any[] }>(`/webhooks/logs?${params}`)
+  },
+
+  create: (data: {
+    name: string
+    url: string
+    secret?: string
+    events: string[]
+    headers?: Record<string, string>
+    enabled?: boolean
+  }) =>
+    request<any>('/webhooks', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  update: (id: number, data: any) =>
+    request<any>(`/webhooks/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+
+  delete: (id: number) =>
+    request<any>(`/webhooks/${id}`, { method: 'DELETE' }),
+
+  toggle: (id: number, enabled: boolean) =>
+    request<any>(`/webhooks/${id}/toggle`, {
+      method: 'PATCH',
+      body: JSON.stringify({ enabled }),
+    }),
+}
+
+// Push Notifications
+export const pushNotifications = {
+  getConfigs: () => request<{ configs: any[] }>('/push/config'),
+
+  setupWeb: (subject?: string) =>
+    request<{ vapid_public_key: string }>('/push/config/web', {
+      method: 'POST',
+      body: JSON.stringify({ subject }),
+    }),
+
+  setupIOS: (data: {
+    key_id: string
+    team_id: string
+    bundle_id: string
+    private_key: string
+    production?: boolean
+  }) =>
+    request<any>('/push/config/ios', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  setupAndroid: (data: {
+    project_id: string
+    private_key_id?: string
+    private_key: string
+    client_email: string
+    client_id?: string
+  }) =>
+    request<any>('/push/config/android', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  toggle: (platform: string, enabled: boolean) =>
+    request<any>(`/push/config/${platform}/toggle`, {
+      method: 'PATCH',
+      body: JSON.stringify({ enabled }),
+    }),
+
+  send: (data: { 
+    title: string
+    body?: string
+    user_id?: string
+    user_ids?: string[]
+    filter?: {
+      role?: string
+      email_verified?: boolean
+      created_after?: string
+      created_before?: string
+      metadata?: Record<string, any>
+    }
+    data?: any 
+  }) =>
+    request<any>('/push/send', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  list: (limit = 50) =>
+    request<{ notifications: any[] }>(`/push/notifications?limit=${limit}`),
+}

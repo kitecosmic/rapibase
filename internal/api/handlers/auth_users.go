@@ -598,10 +598,13 @@ func (h *AuthUsersHandler) UpdateUser(c *fiber.Ctx) error {
 	id := c.Params("id")
 
 	var req struct {
-		Email         *string `json:"email,omitempty"`
-		Password      *string `json:"password,omitempty"`
-		FullName      *string `json:"full_name,omitempty"`
-		EmailVerified *bool   `json:"email_verified,omitempty"`
+		Email         *string                `json:"email,omitempty"`
+		Password      *string                `json:"password,omitempty"`
+		FullName      *string                `json:"full_name,omitempty"`
+		Phone         *string                `json:"phone,omitempty"`
+		Role          *string                `json:"role,omitempty"`
+		EmailVerified *bool                  `json:"email_verified,omitempty"`
+		Metadata      map[string]interface{} `json:"metadata,omitempty"`
 	}
 
 	if err := c.BodyParser(&req); err != nil {
@@ -615,7 +618,7 @@ func (h *AuthUsersHandler) UpdateUser(c *fiber.Ctx) error {
 	}
 
 	// Update user
-	if err := h.db.UpdateAuthUser(ctx, id, req.Email, req.Password, req.FullName, req.EmailVerified); err != nil {
+	if err := h.db.UpdateAuthUserFull(ctx, id, req.Email, req.Password, req.FullName, req.Phone, req.Role, req.EmailVerified, req.Metadata); err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "Failed to update user")
 	}
 
@@ -629,6 +632,8 @@ func (h *AuthUsersHandler) UpdateUser(c *fiber.Ctx) error {
 		PhoneVerified: user.PhoneVerified,
 		FullName:      user.FullName,
 		AvatarURL:     user.AvatarURL,
+		Role:          user.Role,
+		Metadata:      user.Metadata,
 		Provider:      user.Provider,
 		LastSignIn:    user.LastSignIn,
 		CreatedAt:     user.CreatedAt,
@@ -651,4 +656,122 @@ func (h *AuthUsersHandler) DeleteUser(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{
 		"message": "User deleted",
 	})
+}
+
+// BulkUpdateUsers updates multiple auth users at once (admin only)
+func (h *AuthUsersHandler) BulkUpdateUsers(c *fiber.Ctx) error {
+	ctx := context.Background()
+
+	var req struct {
+		// Option 1: Update specific users by ID
+		Users []struct {
+			ID            string                 `json:"id"`
+			Role          *string                `json:"role,omitempty"`
+			Metadata      map[string]interface{} `json:"metadata,omitempty"`
+			EmailVerified *bool                  `json:"email_verified,omitempty"`
+		} `json:"users,omitempty"`
+
+		// Option 2: Update all users matching a filter
+		Filter *struct {
+			Role          *string `json:"role,omitempty"`
+			EmailVerified *bool   `json:"email_verified,omitempty"`
+		} `json:"filter,omitempty"`
+		Update struct {
+			Role          *string                `json:"role,omitempty"`
+			Metadata      map[string]interface{} `json:"metadata,omitempty"`
+			EmailVerified *bool                  `json:"email_verified,omitempty"`
+		} `json:"update,omitempty"`
+	}
+
+	if err := c.BodyParser(&req); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "Invalid request body")
+	}
+
+	var updated int
+	var errors []string
+
+	// Option 1: Update specific users by ID
+	if len(req.Users) > 0 {
+		for _, u := range req.Users {
+			err := h.db.UpdateAuthUserFull(ctx, u.ID, nil, nil, nil, nil, u.Role, u.EmailVerified, u.Metadata)
+			if err != nil {
+				errors = append(errors, fmt.Sprintf("Failed to update user %s: %v", u.ID, err))
+			} else {
+				updated++
+			}
+		}
+	}
+
+	// Option 2: Update by filter
+	if req.Filter != nil {
+		count, err := h.db.BulkUpdateAuthUsers(ctx, req.Filter.Role, req.Filter.EmailVerified, req.Update.Role, req.Update.EmailVerified, req.Update.Metadata)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "Failed to bulk update users")
+		}
+		updated = count
+	}
+
+	response := fiber.Map{
+		"updated": updated,
+		"message": fmt.Sprintf("Updated %d users", updated),
+	}
+	if len(errors) > 0 {
+		response["errors"] = errors
+	}
+
+	return c.JSON(response)
+}
+
+// ============================================
+// API Endpoints (require SERVICE_KEY via apikey header)
+// These are for external automations (n8n, scripts, etc.)
+// ============================================
+
+// requireServiceKey checks if the request has a valid SERVICE_KEY
+func (h *AuthUsersHandler) requireServiceKey(c *fiber.Ctx) error {
+	apiKeyType := c.Locals("apiKeyType")
+	if apiKeyType != "service" {
+		return fiber.NewError(fiber.StatusForbidden, "Service key required for this operation")
+	}
+	return nil
+}
+
+// ListUsersAPI lists all auth users (SERVICE_KEY only)
+func (h *AuthUsersHandler) ListUsersAPI(c *fiber.Ctx) error {
+	if err := h.requireServiceKey(c); err != nil {
+		return err
+	}
+	return h.ListUsers(c)
+}
+
+// CreateUserAPI creates a new auth user (SERVICE_KEY only)
+func (h *AuthUsersHandler) CreateUserAPI(c *fiber.Ctx) error {
+	if err := h.requireServiceKey(c); err != nil {
+		return err
+	}
+	return h.CreateUser(c)
+}
+
+// UpdateUserAPI updates an auth user (SERVICE_KEY only)
+func (h *AuthUsersHandler) UpdateUserAPI(c *fiber.Ctx) error {
+	if err := h.requireServiceKey(c); err != nil {
+		return err
+	}
+	return h.UpdateUser(c)
+}
+
+// DeleteUserAPI deletes an auth user (SERVICE_KEY only)
+func (h *AuthUsersHandler) DeleteUserAPI(c *fiber.Ctx) error {
+	if err := h.requireServiceKey(c); err != nil {
+		return err
+	}
+	return h.DeleteUser(c)
+}
+
+// BulkUpdateUsersAPI updates multiple auth users (SERVICE_KEY only)
+func (h *AuthUsersHandler) BulkUpdateUsersAPI(c *fiber.Ctx) error {
+	if err := h.requireServiceKey(c); err != nil {
+		return err
+	}
+	return h.BulkUpdateUsers(c)
 }

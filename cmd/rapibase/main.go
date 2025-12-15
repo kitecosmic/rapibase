@@ -59,7 +59,7 @@ func main() {
 	}))
 
 	// Setup routes
-	api.SetupRoutes(app, db, cfg)
+	_ = api.SetupRoutes(app, db, cfg)
 
 	// Serve static files (React SPA)
 	app.Static("/", "./web/dist")

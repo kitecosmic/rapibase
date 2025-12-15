@@ -38,11 +38,11 @@ func (db *DB) GetRows(ctx context.Context, tableName string, params models.Pagin
 
 	// Build query
 	query := fmt.Sprintf("SELECT * FROM %s", quoteIdentifier(tableName))
-	
+
 	if params.OrderBy != "" && isValidIdentifier(params.OrderBy) {
 		query += fmt.Sprintf(" ORDER BY %s %s", quoteIdentifier(params.OrderBy), strings.ToUpper(params.Order))
 	}
-	
+
 	query += fmt.Sprintf(" LIMIT %d OFFSET %d", params.PageSize, offset)
 
 	rows, err := db.Pool.Query(ctx, query)
@@ -111,6 +111,45 @@ func (db *DB) InsertRow(ctx context.Context, tableName string, data map[string]i
 
 	if len(results) == 0 {
 		return nil, fmt.Errorf("insert failed")
+	}
+
+	return results[0], nil
+}
+
+// GetRowByID returns a single row by its primary key
+func (db *DB) GetRowByID(ctx context.Context, tableName string, id interface{}) (map[string]interface{}, error) {
+	if !isValidIdentifier(tableName) {
+		return nil, fmt.Errorf("invalid table name")
+	}
+
+	// Get primary key column
+	schema, err := db.GetTableSchema(ctx, tableName)
+	if err != nil {
+		return nil, err
+	}
+	if schema.PrimaryKey == "" {
+		return nil, fmt.Errorf("table has no primary key")
+	}
+
+	query := fmt.Sprintf(
+		"SELECT * FROM %s WHERE %s = $1",
+		quoteIdentifier(tableName),
+		quoteIdentifier(schema.PrimaryKey),
+	)
+
+	rows, err := db.Pool.Query(ctx, query, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	results, err := pgxRowsToMaps(rows)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(results) == 0 {
+		return nil, fmt.Errorf("row not found")
 	}
 
 	return results[0], nil
@@ -210,7 +249,7 @@ func (db *DB) ExecuteQuery(ctx context.Context, sql string, params []interface{}
 
 	// Determine if it's a SELECT query
 	trimmedSQL := strings.TrimSpace(strings.ToUpper(sql))
-	isSelect := strings.HasPrefix(trimmedSQL, "SELECT") || 
+	isSelect := strings.HasPrefix(trimmedSQL, "SELECT") ||
 		strings.HasPrefix(trimmedSQL, "WITH") ||
 		strings.HasPrefix(trimmedSQL, "SHOW") ||
 		strings.HasPrefix(trimmedSQL, "EXPLAIN")
