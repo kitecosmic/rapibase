@@ -41,8 +41,18 @@ services:
       
       # Auth Redirect
       - AUTH_REDIRECT_URL=${AUTH_REDIRECT_URL:-}
+      
+      # Storage (MinIO)
+      - STORAGE_ENABLED=${STORAGE_ENABLED:-true}
+      - STORAGE_ENDPOINT=minio:9000
+      - STORAGE_ACCESS_KEY=${STORAGE_ACCESS_KEY:-minioadmin}
+      - STORAGE_SECRET_KEY=${STORAGE_SECRET_KEY:-minioadmin}
+      - STORAGE_USE_SSL=false
+      - STORAGE_PUBLIC_URL=${STORAGE_PUBLIC_URL:-http://localhost:9000}
     depends_on:
       db:
+        condition: service_healthy
+      minio:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
@@ -67,5 +77,24 @@ services:
       retries: 5
     restart: unless-stopped
 
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    environment:
+      - MINIO_ROOT_USER=${STORAGE_ACCESS_KEY:-minioadmin}
+      - MINIO_ROOT_PASSWORD=${STORAGE_SECRET_KEY:-minioadmin}
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
 volumes:
   postgres_data:
+  minio_data:

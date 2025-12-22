@@ -1,6 +1,7 @@
 package api
 
 import (
+	"log"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -9,6 +10,7 @@ import (
 	"github.com/rapibase/rapibase/internal/auth"
 	"github.com/rapibase/rapibase/internal/config"
 	"github.com/rapibase/rapibase/internal/database"
+	"github.com/rapibase/rapibase/internal/storage"
 )
 
 func SetupRoutes(app *fiber.App, db *database.DB, cfg *config.Config) *WebhookDispatcher {
@@ -182,6 +184,49 @@ func SetupRoutes(app *fiber.App, db *database.DB, cfg *config.Config) *WebhookDi
 	// Use this from n8n, webhooks, or other automation tools
 	// ============================================
 	pushAPI.Post("/send", pushHandler.SendNotification)
+
+	// ============================================
+	// STORAGE (MinIO) - Admin routes
+	// ============================================
+	if cfg.IsStorageEnabled() {
+		storageClient, err := storage.NewClient(cfg)
+		if err != nil {
+			log.Printf("Warning: Failed to initialize storage client: %v", err)
+		} else {
+			storageHandler := handlers.NewStorageHandler(storageClient, db, cfg)
+
+			// Dashboard storage routes (admin panel)
+			storageAdmin := protected.Group("/storage")
+			storageAdmin.Get("/buckets", storageHandler.ListBuckets)
+			storageAdmin.Post("/buckets", storageHandler.CreateBucket)
+			storageAdmin.Get("/buckets/:name", storageHandler.GetBucketInfo)
+			storageAdmin.Delete("/buckets/:name", storageHandler.DeleteBucket)
+			storageAdmin.Patch("/buckets/:name/policy", storageHandler.SetBucketPolicy)
+			storageAdmin.Get("/buckets/:name/objects", storageHandler.ListObjects)
+			storageAdmin.Post("/buckets/:name/objects", storageHandler.UploadObject)
+			storageAdmin.Post("/buckets/:name/folders", storageHandler.CreateFolder)
+			storageAdmin.Post("/buckets/:name/move", storageHandler.MoveObject)
+			storageAdmin.Post("/buckets/:name/copy", storageHandler.CopyObject)
+			storageAdmin.Get("/buckets/:name/objects/*", storageHandler.GetObject)
+			storageAdmin.Delete("/buckets/:name/objects/*", storageHandler.DeleteObject)
+			storageAdmin.Get("/buckets/:name/presign/*", storageHandler.GetPresignedURL)
+
+			// Public API storage routes (for third-party apps)
+			storageAPI := api.Group("/storage", apiKeyMiddleware.RequireAPIKey())
+			storageAPI.Post("/:bucket/upload", storageHandler.UploadObjectAPI)
+			storageAPI.Get("/:bucket/list", storageHandler.ListObjectsAPI)
+			storageAPI.Get("/:bucket/search", storageHandler.SearchObjectsByMetadata)
+			storageAPI.Get("/:bucket/metadata/*", storageHandler.GetObjectMetadata)
+			storageAPI.Patch("/:bucket/metadata/*", storageHandler.UpdateObjectMetadata)
+			storageAPI.Get("/:bucket/*", storageHandler.GetObjectAPI)
+			storageAPI.Delete("/:bucket/*", storageHandler.DeleteObjectAPI)
+
+			// Get files by owner (useful for user profiles, etc.)
+			storageAPI.Get("/owner/:owner_id", storageHandler.ListObjectsByOwner)
+
+			log.Println("Storage (MinIO) initialized successfully")
+		}
+	}
 
 	return webhookDispatcher
 }

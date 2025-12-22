@@ -40,6 +40,14 @@ type Config struct {
 
 	// Auth Redirects (for third-party apps)
 	AuthRedirectURL string // Where to redirect after email verification, magic link, etc.
+
+	// Storage (MinIO)
+	StorageEnabled   bool
+	StorageEndpoint  string
+	StorageAccessKey string
+	StorageSecretKey string
+	StorageUseSSL    bool
+	StoragePublicURL string
 }
 
 func Load() *Config {
@@ -75,6 +83,14 @@ func Load() *Config {
 
 		// Auth Redirects - defaults to APP_URL if not set
 		AuthRedirectURL: getEnv("AUTH_REDIRECT_URL", ""),
+
+		// Storage (MinIO)
+		StorageEnabled:   getEnvBool("STORAGE_ENABLED", true),
+		StorageEndpoint:  getEnv("STORAGE_ENDPOINT", "localhost:9000"),
+		StorageAccessKey: getEnv("STORAGE_ACCESS_KEY", "minioadmin"),
+		StorageSecretKey: getEnv("STORAGE_SECRET_KEY", "minioadmin"),
+		StorageUseSSL:    getEnvBool("STORAGE_USE_SSL", false),
+		StoragePublicURL: getEnv("STORAGE_PUBLIC_URL", "http://localhost:9000"),
 	}
 }
 
@@ -97,6 +113,17 @@ func getEnvOrGenerate(key string) string {
 
 func (c *Config) IsSMTPConfigured() bool {
 	return c.SMTPHost != "" && c.SMTPUser != "" && c.SMTPPass != ""
+}
+
+func (c *Config) IsStorageEnabled() bool {
+	return c.StorageEnabled && c.StorageEndpoint != "" && c.StorageAccessKey != "" && c.StorageSecretKey != ""
+}
+
+func getEnvBool(key string, defaultValue bool) bool {
+	if value := os.Getenv(key); value != "" {
+		return strings.ToLower(strings.TrimSpace(value)) == "true" || value == "1"
+	}
+	return defaultValue
 }
 
 // parseDuration parses duration strings like "1h", "24h", "7d", "30d"

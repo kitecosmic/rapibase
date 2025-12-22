@@ -8,7 +8,7 @@ import (
 	"github.com/rapibase/rapibase/internal/models"
 )
 
-// GetTables returns all user tables (excluding internal _rapibase_ and auth_ tables)
+// GetTables returns all user tables (excluding internal _rapibase_, auth_, and storage_ tables)
 func (db *DB) GetTables(ctx context.Context) ([]models.TableInfo, error) {
 	query := `
 		SELECT 
@@ -19,6 +19,7 @@ func (db *DB) GetTables(ctx context.Context) ([]models.TableInfo, error) {
 		AND t.table_type = 'BASE TABLE'
 		AND t.table_name NOT LIKE '_rapibase_%'
 		AND t.table_name NOT LIKE 'auth_%'
+		AND t.table_name NOT IN ('storage_buckets', 'storage_objects')
 		ORDER BY t.table_name
 	`
 
@@ -187,7 +188,8 @@ func (db *DB) DropTable(ctx context.Context, tableName string) error {
 	}
 
 	lowerName := strings.ToLower(tableName)
-	if strings.HasPrefix(lowerName, "_rapibase_") || strings.HasPrefix(lowerName, "auth_") {
+	if strings.HasPrefix(lowerName, "_rapibase_") || strings.HasPrefix(lowerName, "auth_") ||
+		lowerName == "storage_buckets" || lowerName == "storage_objects" {
 		return fmt.Errorf("cannot drop internal tables")
 	}
 

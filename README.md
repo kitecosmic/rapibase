@@ -12,6 +12,7 @@
 - ✅ **SQL Editor** - Execute raw SQL queries with syntax highlighting
 - ✅ **Data Import/Export** - Import from SQL or JSON, export to both formats
 - ✅ **REST API** - Auto-generated CRUD endpoints for all your tables
+- ✅ **File Storage** - S3-compatible storage with MinIO (buckets, upload, download, image preview)
 - ✅ **Docker Ready** - Single command deployment with docker-compose
 
 ### Authentication
@@ -26,6 +27,13 @@
 - ✅ **API Keys** - Anon Key (public) and Service Key (admin)
 - ✅ **Rate Limiting** - Protect auth endpoints from abuse
 - ✅ **SMTP Integration** - Send emails via any SMTP provider
+
+### Storage
+- ✅ **S3-Compatible** - Powered by MinIO, compatible with AWS S3 SDKs
+- ✅ **Bucket Management** - Create public/private buckets via UI
+- ✅ **File Operations** - Upload, download, delete, move, copy files
+- ✅ **Image Preview** - View images directly in the dashboard
+- ✅ **Presigned URLs** - Generate temporary access URLs for private files
 
 ## Quick Start
 
@@ -179,7 +187,7 @@ RapiBase uses two types of API keys:
 
 ```javascript
 // Client-side: Anon Key + JWT
-fetch('/api/v1/rest/v1/products', {
+fetch('/api/v1/rest/products', {
   headers: { 
     'apikey': 'ANON_KEY',
     'Authorization': 'Bearer ' + accessToken
@@ -187,7 +195,7 @@ fetch('/api/v1/rest/v1/products', {
 })
 
 // Server-side: Service Key only
-fetch('/api/v1/rest/v1/products', {
+fetch('/api/v1/rest/products', {
   headers: { 'apikey': 'SERVICE_KEY' }
 })
 ```
@@ -196,63 +204,78 @@ fetch('/api/v1/rest/v1/products', {
 
 ### Admin Authentication (Dashboard)
 ```
-POST /api/v1/auth/login           - Admin login
-POST /api/v1/auth/forgot-password - Request password reset
-POST /api/v1/auth/reset-password  - Reset password
-POST /api/v1/auth/refresh         - Refresh token
-GET  /api/v1/auth/me              - Get current admin
+POST /api/dashboard/auth/login           - Admin login
+POST /api/dashboard/auth/forgot-password - Request password reset
+POST /api/dashboard/auth/reset-password  - Reset password
+POST /api/dashboard/auth/refresh         - Refresh token
+GET  /api/dashboard/auth/me              - Get current admin
 ```
 
 ### User Authentication (For Your Apps)
 All endpoints require `apikey` header.
 
 ```
-POST /api/v1/auth/v1/signup         - Create new user
-POST /api/v1/auth/v1/signin         - Sign in user
-POST /api/v1/auth/v1/token          - Refresh token (rotating)
-POST /api/v1/auth/v1/signout        - Sign out user
+POST /api/v1/auth/signup         - Create new user
+POST /api/v1/auth/signin         - Sign in user
+POST /api/v1/auth/token          - Refresh token (rotating)
+POST /api/v1/auth/signout        - Sign out user
 
-POST /api/v1/auth/v1/magiclink      - Send magic link email
-GET  /api/v1/auth/v1/magic          - Verify magic link (from email)
+POST /api/v1/auth/magiclink      - Send magic link email
+GET  /api/v1/auth/magic          - Verify magic link (from email)
 
-POST /api/v1/auth/v1/resend         - Resend verification email
-GET  /api/v1/auth/v1/verify         - Verify email (from email)
+POST /api/v1/auth/resend         - Resend verification email
+GET  /api/v1/auth/verify         - Verify email (from email)
 
-POST /api/v1/auth/v1/forgot-password - Send password reset email
-POST /api/v1/auth/v1/reset-password  - Reset password with token
+POST /api/v1/auth/forgot-password - Send password reset email
+POST /api/v1/auth/reset-password  - Reset password with token
 ```
 
 ### REST API (For Your Apps)
 Requires `apikey` header. Anon Key also requires `Authorization: Bearer <token>`.
 
 ```
-GET    /api/v1/rest/v1/:table           - Get rows (paginated)
-POST   /api/v1/rest/v1/:table           - Insert row
-PUT    /api/v1/rest/v1/:table/:id       - Update row
-DELETE /api/v1/rest/v1/:table/:id       - Delete row
+GET    /api/v1/rest/:table           - Get rows (paginated)
+POST   /api/v1/rest/:table           - Insert row
+PUT    /api/v1/rest/:table/:id       - Update row
+DELETE /api/v1/rest/:table/:id       - Delete row
 ```
 
 Query parameters:
 - `page` - Page number (default: 1)
-- `page_size` - Rows per page (default: 50)
+- `page_size` - Rows per page (default: 50, max: 1000)
 - `order_by` - Column to sort by
-- `order_dir` - Sort direction (asc/desc)
-- `filter` - Filter rows (format: `column:op:value`)
+- `order` - Sort direction (asc/desc)
+- `select` - Comma-separated columns to return
+- `column.operator=value` - Filter rows (operators: eq, neq, gt, gte, lt, lte, like, ilike, is, in)
 
 ### Tables (Admin)
 ```
-GET    /api/v1/tables            - List all tables
-POST   /api/v1/tables            - Create table
-GET    /api/v1/tables/:name      - Get table schema
-DELETE /api/v1/tables/:name      - Drop table
+GET    /api/dashboard/tables            - List all tables
+POST   /api/dashboard/tables            - Create table
+GET    /api/dashboard/tables/:name      - Get table schema
+DELETE /api/dashboard/tables/:name      - Drop table
 ```
 
 ### SQL & Import/Export (Admin)
 ```
-POST /api/v1/query               - Execute SQL query
-POST /api/v1/import/sql          - Import SQL file
-POST /api/v1/import/json/:table  - Import JSON to table
-GET  /api/v1/export/:table       - Export table (format=json|sql)
+POST /api/dashboard/query               - Execute SQL query
+POST /api/dashboard/import/sql          - Import SQL file
+POST /api/dashboard/import/json/:table  - Import JSON to table
+GET  /api/dashboard/export/:table       - Export table (format=json|sql)
+```
+
+### Storage API (For Your Apps)
+Requires `apikey` header. S3-compatible storage powered by MinIO.
+
+```
+POST   /api/v1/storage/:bucket/upload      - Upload file
+GET    /api/v1/storage/:bucket/list        - List files
+GET    /api/v1/storage/:bucket/*           - Download file
+DELETE /api/v1/storage/:bucket/*           - Delete file
+GET    /api/v1/storage/:bucket/search      - Search by metadata
+GET    /api/v1/storage/:bucket/metadata/*  - Get file metadata
+PATCH  /api/v1/storage/:bucket/metadata/*  - Update file metadata
+GET    /api/v1/storage/owner/:user_id      - Get files by owner
 ```
 
 ## Authentication Flows
@@ -261,7 +284,7 @@ GET  /api/v1/export/:table       - Export table (format=json|sql)
 
 ```javascript
 // 1. Request magic link
-await fetch('/api/v1/auth/v1/magiclink', {
+await fetch('/api/v1/auth/magiclink', {
   method: 'POST',
   headers: { 'apikey': ANON_KEY, 'Content-Type': 'application/json' },
   body: JSON.stringify({ 
@@ -289,7 +312,7 @@ window.location.href = '/dashboard'
 
 ```javascript
 // Request verification email
-await fetch('/api/v1/auth/v1/resend', {
+await fetch('/api/v1/auth/resend', {
   method: 'POST',
   headers: { 'apikey': ANON_KEY, 'Content-Type': 'application/json' },
   body: JSON.stringify({ email: 'user@example.com' })
@@ -303,7 +326,7 @@ await fetch('/api/v1/auth/v1/resend', {
 
 ```javascript
 // 1. Request reset email
-await fetch('/api/v1/auth/v1/forgot-password', {
+await fetch('/api/v1/auth/forgot-password', {
   method: 'POST',
   headers: { 'apikey': ANON_KEY, 'Content-Type': 'application/json' },
   body: JSON.stringify({ email: 'user@example.com' })
@@ -313,7 +336,7 @@ await fetch('/api/v1/auth/v1/forgot-password', {
 // https://yourapp.com/reset-password?token=abc123...
 
 // 3. Submit new password
-await fetch('/api/v1/auth/v1/reset-password', {
+await fetch('/api/v1/auth/reset-password', {
   method: 'POST',
   headers: { 'apikey': ANON_KEY, 'Content-Type': 'application/json' },
   body: JSON.stringify({ 

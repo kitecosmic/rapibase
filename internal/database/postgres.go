@@ -209,6 +209,39 @@ func (db *DB) Migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_push_subs_platform ON _rapibase_push_subscriptions(platform)`,
 		`CREATE INDEX IF NOT EXISTS idx_notifications_user ON _rapibase_notifications(user_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_notifications_read ON _rapibase_notifications(user_id, read_at)`,
+
+		// ============================================
+		// STORAGE - File metadata and relationships
+		// ============================================
+		`CREATE TABLE IF NOT EXISTS storage_buckets (
+			id VARCHAR(255) PRIMARY KEY,
+			name VARCHAR(255) NOT NULL UNIQUE,
+			public BOOLEAN DEFAULT FALSE,
+			file_size_limit BIGINT,
+			allowed_mime_types TEXT[],
+			created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+			updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+		)`,
+
+		`CREATE TABLE IF NOT EXISTS storage_objects (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			bucket_id VARCHAR(255) NOT NULL REFERENCES storage_buckets(id) ON DELETE CASCADE,
+			name TEXT NOT NULL,
+			owner UUID REFERENCES auth_users(id) ON DELETE SET NULL,
+			size BIGINT NOT NULL DEFAULT 0,
+			mime_type VARCHAR(255),
+			etag VARCHAR(255),
+			path_tokens TEXT[] GENERATED ALWAYS AS (string_to_array(name, '/')) STORED,
+			metadata JSONB DEFAULT '{}',
+			created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+			updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+			UNIQUE(bucket_id, name)
+		)`,
+
+		`CREATE INDEX IF NOT EXISTS idx_storage_objects_bucket ON storage_objects(bucket_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_storage_objects_owner ON storage_objects(owner)`,
+		`CREATE INDEX IF NOT EXISTS idx_storage_objects_name ON storage_objects(name)`,
+		`CREATE INDEX IF NOT EXISTS idx_storage_objects_path ON storage_objects USING GIN(path_tokens)`,
 	}
 
 	for _, migration := range migrations {
