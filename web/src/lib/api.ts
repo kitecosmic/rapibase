@@ -275,3 +275,76 @@ export const pushNotifications = {
   list: (limit = 50) =>
     request<{ notifications: any[] }>(`/push/notifications?limit=${limit}`),
 }
+
+// Storage (MinIO)
+export const storage = {
+  listBuckets: () => request<{ buckets: any[] }>('/storage/buckets'),
+
+  createBucket: (name: string, isPublic: boolean = false) =>
+    request<any>('/storage/buckets', {
+      method: 'POST',
+      body: JSON.stringify({ name, public: isPublic }),
+    }),
+
+  deleteBucket: (name: string, force: boolean = false) =>
+    request<any>(`/storage/buckets/${name}?force=${force}`, { method: 'DELETE' }),
+
+  getBucketInfo: (name: string) => request<any>(`/storage/buckets/${name}`),
+
+  setBucketPolicy: (name: string, isPublic: boolean) =>
+    request<any>(`/storage/buckets/${name}/policy`, {
+      method: 'PATCH',
+      body: JSON.stringify({ public: isPublic }),
+    }),
+
+  listObjects: (bucket: string, prefix: string = '') => {
+    const params = new URLSearchParams()
+    if (prefix) params.set('prefix', prefix)
+    return request<{ objects: any[]; prefix: string }>(`/storage/buckets/${bucket}/objects?${params}`)
+  },
+
+  uploadObject: async (bucket: string, file: File, prefix: string = '') => {
+    const { token } = useAuthStore.getState()
+    const formData = new FormData()
+    formData.append('file', file)
+    if (prefix) formData.append('prefix', prefix)
+
+    const response = await fetch(`${API_BASE}/storage/buckets/${bucket}/objects`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      body: formData,
+    })
+
+    const data = await response.json()
+    if (!response.ok) throw new ApiError(response.status, data.error)
+    return data
+  },
+
+  deleteObject: (bucket: string, key: string) =>
+    request<any>(`/storage/buckets/${bucket}/objects/${key}`, { method: 'DELETE' }),
+
+  getPresignedUrl: (bucket: string, key: string, expiry: number = 60) =>
+    request<{ url: string; expires_in: number }>(`/storage/buckets/${bucket}/presign/${key}?expiry=${expiry}`),
+
+  createFolder: (bucket: string, path: string) =>
+    request<any>(`/storage/buckets/${bucket}/folders`, {
+      method: 'POST',
+      body: JSON.stringify({ path }),
+    }),
+
+  moveObject: (bucket: string, sourceKey: string, destinationKey: string, destBucket?: string) =>
+    request<any>(`/storage/buckets/${bucket}/move`, {
+      method: 'POST',
+      body: JSON.stringify({ source_key: sourceKey, destination_key: destinationKey, destination_bucket: destBucket }),
+    }),
+
+  copyObject: (bucket: string, sourceKey: string, destinationKey: string, destBucket?: string) =>
+    request<any>(`/storage/buckets/${bucket}/copy`, {
+      method: 'POST',
+      body: JSON.stringify({ source_key: sourceKey, destination_key: destinationKey, destination_bucket: destBucket }),
+    }),
+
+  getObjectUrl: (bucket: string, key: string) => `${API_BASE}/storage/buckets/${bucket}/objects/${key}`,
+}

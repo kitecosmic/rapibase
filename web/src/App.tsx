@@ -13,6 +13,7 @@ import SQLEditor from './pages/SQLEditor'
 import Import from './pages/Import'
 import Webhooks from './pages/Webhooks'
 import Notifications from './pages/Notifications'
+import Storage from './pages/Storage'
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const { token } = useAuthStore()
@@ -43,6 +44,7 @@ export default function App() {
           <Route path="auth" element={<Auth />} />
           <Route path="webhooks" element={<Webhooks />} />
           <Route path="notifications" element={<Notifications />} />
+          <Route path="storage" element={<Storage />} />
           <Route path="docs" element={<Docs />} />
         </Route>
       </Routes>

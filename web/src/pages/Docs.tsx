@@ -11,10 +11,11 @@ import {
   Zap,
   Code,
   FileText,
-  ChevronRight
+  ChevronRight,
+  HardDrive
 } from 'lucide-react'
 
-type DocSection = 'overview' | 'quickstart' | 'auth-flow' | 'api-keys' | 'rest-api' | 'email-flows' | 'examples'
+type DocSection = 'overview' | 'quickstart' | 'auth-flow' | 'api-keys' | 'rest-api' | 'storage-api' | 'email-flows' | 'examples'
 
 export default function Docs() {
   const [copiedSection, setCopiedSection] = useState<string | null>(null)
@@ -33,6 +34,7 @@ export default function Docs() {
     { id: 'auth-flow', title: 'Authentication Flow', icon: <Users className="w-4 h-4" /> },
     { id: 'email-flows', title: 'Email Flows', icon: <Mail className="w-4 h-4" /> },
     { id: 'rest-api', title: 'REST API', icon: <Database className="w-4 h-4" /> },
+    { id: 'storage-api', title: 'Storage API', icon: <HardDrive className="w-4 h-4" /> },
     { id: 'examples', title: 'Full Examples', icon: <Code className="w-4 h-4" /> },
   ]
 
@@ -43,6 +45,7 @@ export default function Docs() {
 RapiBase is a backend-as-a-service that provides:
 - **Authentication**: User signup, signin, magic links, email verification, password reset
 - **REST API**: CRUD operations on your database tables
+- **Storage**: S3-compatible file storage with MinIO
 - **API Keys**: Anon key (public) and Service key (admin)
 
 ## API Keys
@@ -245,6 +248,157 @@ Body: { "price": 149.99 }
 **DELETE (DELETE)**
 \`\`\`
 DELETE /api/v1/rest/{table}/{id}
+\`\`\`
+
+## Storage API
+
+Base URL: \`/api/v1/storage\`
+
+S3-compatible file storage powered by MinIO. Requires API key for all operations.
+
+### Upload Files
+\`\`\`
+POST /api/v1/storage/{bucket}/upload
+Headers: { "apikey": "SERVICE_KEY" }
+Content-Type: multipart/form-data
+
+Form Data:
+  - file: (binary file)
+  - path: "folder/" (optional prefix)
+
+Response: {
+  "key": "folder/image.png",
+  "size": 102400,
+  "content_type": "image/png",
+  "url": "/bucket-name/folder/image.png",
+  "public_url": "http://localhost:9000/bucket-name/folder/image.png"
+}
+\`\`\`
+
+### List Files
+\`\`\`
+GET /api/v1/storage/{bucket}/list
+GET /api/v1/storage/{bucket}/list?prefix=folder/
+Headers: { "apikey": "SERVICE_KEY" }
+
+Response: {
+  "objects": [
+    { "key": "image.png", "size": 102400, "is_dir": false },
+    { "key": "subfolder/", "size": 0, "is_dir": true }
+  ]
+}
+\`\`\`
+
+### Download Files
+\`\`\`
+GET /api/v1/storage/{bucket}/{path/to/file}
+Headers: { "apikey": "SERVICE_KEY" }
+
+Response: Binary file content
+\`\`\`
+
+### Delete Files
+\`\`\`
+DELETE /api/v1/storage/{bucket}/{path/to/file}
+Headers: { "apikey": "SERVICE_KEY" }
+
+Response: { "message": "Object deleted successfully" }
+\`\`\`
+
+### Upload with Owner & Metadata
+\`\`\`
+POST /api/v1/storage/{bucket}/upload
+Headers: { "apikey": "SERVICE_KEY" }
+Content-Type: multipart/form-data
+
+Form Data:
+  - file: (binary file)
+  - path: "products/123/" (optional prefix)
+  - owner_id: "user-uuid" (optional - links file to auth_users)
+  - metadata: '{"product_id": "123", "type": "thumbnail"}' (optional JSON)
+
+Response: {
+  "id": "file-uuid",
+  "key": "products/123/image.png",
+  "owner": "user-uuid",
+  "metadata": { "product_id": "123", "type": "thumbnail" },
+  "public_url": "http://localhost:9000/bucket/products/123/image.png"
+}
+\`\`\`
+
+### Get Files by Owner
+\`\`\`
+GET /api/v1/storage/owner/{user_id}
+Headers: { "apikey": "SERVICE_KEY" }
+
+Response: {
+  "objects": [
+    { "id": "uuid", "name": "avatar.png", "bucket_id": "users", ... },
+    { "id": "uuid", "name": "cover.jpg", "bucket_id": "users", ... }
+  ],
+  "owner": "user-uuid"
+}
+\`\`\`
+
+### Search Files by Metadata
+\`\`\`
+GET /api/v1/storage/{bucket}/search?key=product_id&value=123
+Headers: { "apikey": "SERVICE_KEY" }
+
+Response: {
+  "objects": [
+    { "id": "uuid", "name": "image1.png", "metadata": { "product_id": "123" } },
+    { "id": "uuid", "name": "image2.png", "metadata": { "product_id": "123" } }
+  ]
+}
+\`\`\`
+
+### Get/Update File Metadata
+\`\`\`
+GET /api/v1/storage/{bucket}/metadata/{path/to/file}
+Headers: { "apikey": "SERVICE_KEY" }
+
+PATCH /api/v1/storage/{bucket}/metadata/{path/to/file}
+Headers: { "apikey": "SERVICE_KEY" }
+Body: { "metadata": { "product_id": "456", "featured": true } }
+\`\`\`
+
+### JavaScript Storage Example
+\`\`\`javascript
+// Upload a file
+async function uploadFile(bucket, file, path = '') {
+  const formData = new FormData();
+  formData.append('file', file);
+  if (path) formData.append('path', path);
+
+  const response = await fetch(\`\${RAPIBASE_URL}/api/v1/storage/\${bucket}/upload\`, {
+    method: 'POST',
+    headers: { 'apikey': SERVICE_KEY },
+    body: formData
+  });
+  return response.json();
+}
+
+// List files
+async function listFiles(bucket, prefix = '') {
+  const url = new URL(\`\${RAPIBASE_URL}/api/v1/storage/\${bucket}/list\`);
+  if (prefix) url.searchParams.set('prefix', prefix);
+  const response = await fetch(url, { headers: { 'apikey': SERVICE_KEY } });
+  return response.json();
+}
+
+// Delete a file
+async function deleteFile(bucket, key) {
+  const response = await fetch(\`\${RAPIBASE_URL}/api/v1/storage/\${bucket}/\${key}\`, {
+    method: 'DELETE',
+    headers: { 'apikey': SERVICE_KEY }
+  });
+  return response.json();
+}
+
+// Usage
+const result = await uploadFile('images', myFile, 'avatars/');
+console.log('Uploaded:', result.public_url);
 \`\`\`
 
 ## Full Integration Example
@@ -711,6 +865,193 @@ Response: { "id": 1, "name": "Product", "price": 149.99, ... }`} />
 
 Response: { "message": "Row deleted successfully" }`} />
               </div>
+            </div>
+          </div>
+        )
+
+      case 'storage-api':
+        return (
+          <div className="space-y-8">
+            <h2 className="text-2xl font-bold text-gray-900">Storage API</h2>
+            
+            <div className="bg-gray-50 rounded-lg p-4 border">
+              <p className="text-sm text-gray-600">
+                Base URL: <code className="bg-gray-200 px-2 py-1 rounded">/api/v1/storage</code>
+              </p>
+              <p className="text-sm text-gray-500 mt-1">
+                S3-compatible file storage powered by MinIO. Requires API key for all operations.
+              </p>
+            </div>
+
+            {/* Upload Files */}
+            <div className="bg-blue-50 rounded-xl p-6 border border-blue-200">
+              <h3 className="text-lg font-semibold text-blue-900 mb-4">📤 Upload Files</h3>
+              <CodeBlock code={`POST /api/v1/storage/{bucket}/upload
+Headers: { "apikey": "SERVICE_KEY" }
+Content-Type: multipart/form-data
+
+Form Data:
+  - file: (binary file)
+  - path: "products/123/" (optional prefix)
+  - owner_id: "user-uuid" (optional - links to auth_users)
+  - metadata: '{"product_id":"123"}' (optional JSON)
+
+Response: {
+  "id": "file-uuid",
+  "key": "products/123/image.png",
+  "owner": "user-uuid",
+  "metadata": { "product_id": "123" },
+  "public_url": "http://localhost:9000/bucket/..."
+}`} />
+            </div>
+
+            {/* List Files */}
+            <div className="bg-green-50 rounded-xl p-6 border border-green-200">
+              <h3 className="text-lg font-semibold text-green-900 mb-4">📂 List Files</h3>
+              <CodeBlock code={`GET /api/v1/storage/{bucket}/list
+GET /api/v1/storage/{bucket}/list?prefix=folder/
+Headers: { "apikey": "SERVICE_KEY" }
+
+Response: {
+  "objects": [
+    {
+      "key": "folder/image.png",
+      "size": 102400,
+      "last_modified": "2024-01-15T10:30:00Z",
+      "content_type": "image/png",
+      "is_dir": false
+    },
+    {
+      "key": "folder/subfolder/",
+      "size": 0,
+      "is_dir": true
+    }
+  ],
+  "prefix": "folder/"
+}`} />
+            </div>
+
+            {/* Download Files */}
+            <div className="bg-purple-50 rounded-xl p-6 border border-purple-200">
+              <h3 className="text-lg font-semibold text-purple-900 mb-4">📥 Download / Get Files</h3>
+              <CodeBlock code={`GET /api/v1/storage/{bucket}/{path/to/file}
+Headers: { "apikey": "SERVICE_KEY" }
+
+Response: Binary file content with appropriate Content-Type header
+
+// For public buckets, files can be accessed directly:
+GET http://localhost:9000/{bucket}/{path/to/file}`} />
+            </div>
+
+            {/* Delete Files */}
+            <div className="bg-red-50 rounded-xl p-6 border border-red-200">
+              <h3 className="text-lg font-semibold text-red-900 mb-4">🗑️ Delete Files</h3>
+              <CodeBlock code={`DELETE /api/v1/storage/{bucket}/{path/to/file}
+Headers: { "apikey": "SERVICE_KEY" }
+
+Response: { "message": "Object deleted successfully" }`} />
+            </div>
+
+            {/* Get Files by Owner */}
+            <div className="bg-indigo-50 rounded-xl p-6 border border-indigo-200">
+              <h3 className="text-lg font-semibold text-indigo-900 mb-4">👤 Get Files by Owner</h3>
+              <p className="text-sm text-indigo-700 mb-3">Get all files uploaded by a specific user (useful for user profiles, galleries, etc.)</p>
+              <CodeBlock code={`GET /api/v1/storage/owner/{user_id}
+Headers: { "apikey": "SERVICE_KEY" }
+
+Response: {
+  "objects": [
+    { "id": "uuid", "name": "avatar.png", "bucket_id": "users" },
+    { "id": "uuid", "name": "cover.jpg", "bucket_id": "users" }
+  ],
+  "owner": "user-uuid"
+}`} />
+            </div>
+
+            {/* Search by Metadata */}
+            <div className="bg-orange-50 rounded-xl p-6 border border-orange-200">
+              <h3 className="text-lg font-semibold text-orange-900 mb-4">🔍 Search by Metadata</h3>
+              <p className="text-sm text-orange-700 mb-3">Find files by custom metadata (e.g., all images for a product)</p>
+              <CodeBlock code={`GET /api/v1/storage/{bucket}/search?key=product_id&value=123
+Headers: { "apikey": "SERVICE_KEY" }
+
+Response: {
+  "objects": [
+    { "id": "uuid", "name": "image1.png", "metadata": { "product_id": "123" } },
+    { "id": "uuid", "name": "image2.png", "metadata": { "product_id": "123" } }
+  ]
+}`} />
+            </div>
+
+            {/* Update Metadata */}
+            <div className="bg-teal-50 rounded-xl p-6 border border-teal-200">
+              <h3 className="text-lg font-semibold text-teal-900 mb-4">✏️ Get/Update Metadata</h3>
+              <CodeBlock code={`// Get file metadata
+GET /api/v1/storage/{bucket}/metadata/{path/to/file}
+
+// Update file metadata
+PATCH /api/v1/storage/{bucket}/metadata/{path/to/file}
+Headers: { "apikey": "SERVICE_KEY" }
+Body: { "metadata": { "product_id": "456", "featured": true } }`} />
+            </div>
+
+            {/* JavaScript Example */}
+            <div className="bg-gray-900 rounded-xl p-6">
+              <h3 className="text-lg font-semibold text-white mb-4">💻 JavaScript Example</h3>
+              <CodeBlock code={`// Upload a file
+async function uploadFile(bucket, file, path = '') {
+  const formData = new FormData();
+  formData.append('file', file);
+  if (path) formData.append('path', path);
+
+  const response = await fetch(
+    \`\${RAPIBASE_URL}/api/v1/storage/\${bucket}/upload\`,
+    {
+      method: 'POST',
+      headers: { 'apikey': SERVICE_KEY },
+      body: formData
+    }
+  );
+  return response.json();
+}
+
+// List files in a bucket
+async function listFiles(bucket, prefix = '') {
+  const url = new URL(\`\${RAPIBASE_URL}/api/v1/storage/\${bucket}/list\`);
+  if (prefix) url.searchParams.set('prefix', prefix);
+
+  const response = await fetch(url, {
+    headers: { 'apikey': SERVICE_KEY }
+  });
+  return response.json();
+}
+
+// Delete a file
+async function deleteFile(bucket, key) {
+  const response = await fetch(
+    \`\${RAPIBASE_URL}/api/v1/storage/\${bucket}/\${key}\`,
+    {
+      method: 'DELETE',
+      headers: { 'apikey': SERVICE_KEY }
+    }
+  );
+  return response.json();
+}
+
+// Usage
+const result = await uploadFile('images', myFile, 'avatars/');
+console.log('Uploaded:', result.public_url);
+
+const files = await listFiles('images', 'avatars/');
+console.log('Files:', files.objects);`} />
+            </div>
+
+            {/* Bucket Policies */}
+            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+              <p className="text-sm text-yellow-800">
+                <strong>💡 Public vs Private Buckets:</strong> Public buckets allow direct URL access to files. 
+                Private buckets require API key authentication. You can toggle bucket visibility in the Storage dashboard.
+              </p>
             </div>
           </div>
         )

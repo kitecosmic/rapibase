@@ -13,7 +13,8 @@ import {
   Webhook,
   Bell,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  HardDrive
 } from 'lucide-react'
 import { useState, useEffect } from 'react'
 
@@ -21,6 +22,7 @@ const navigation = [
   { name: 'Dashboard', href: '/', icon: Database },
   { name: 'Authentication', href: '/auth', icon: Shield },
   { name: 'Tables', href: '/tables', icon: Table2 },
+  { name: 'Storage', href: '/storage', icon: HardDrive },
   { name: 'Webhooks', href: '/webhooks', icon: Webhook },
   { name: 'Notifications', href: '/notifications', icon: Bell },
   { name: 'SQL Editor', href: '/sql', icon: Terminal },
