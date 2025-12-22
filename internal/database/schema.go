@@ -13,10 +13,8 @@ func (db *DB) GetTables(ctx context.Context) ([]models.TableInfo, error) {
 	query := `
 		SELECT 
 			t.table_name,
-			t.table_schema,
-			COALESCE(s.n_live_tup, 0) as row_count
+			t.table_schema
 		FROM information_schema.tables t
-		LEFT JOIN pg_stat_user_tables s ON t.table_name = s.relname
 		WHERE t.table_schema = 'public' 
 		AND t.table_type = 'BASE TABLE'
 		AND t.table_name NOT LIKE '_rapibase_%'
@@ -33,13 +31,25 @@ func (db *DB) GetTables(ctx context.Context) ([]models.TableInfo, error) {
 	var tables []models.TableInfo
 	for rows.Next() {
 		var t models.TableInfo
-		if err := rows.Scan(&t.Name, &t.Schema, &t.RowCount); err != nil {
+		if err := rows.Scan(&t.Name, &t.Schema); err != nil {
 			return nil, err
 		}
 		tables = append(tables, t)
 	}
 
-	return tables, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Get actual row count for each table
+	for i := range tables {
+		countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s", quoteIdentifier(tables[i].Name))
+		if err := db.Pool.QueryRow(ctx, countQuery).Scan(&tables[i].RowCount); err != nil {
+			tables[i].RowCount = 0
+		}
+	}
+
+	return tables, nil
 }
 
 // GetTableSchema returns detailed schema information for a table

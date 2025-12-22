@@ -29,15 +29,54 @@ func (db *DB) GetRows(ctx context.Context, tableName string, params models.Pagin
 
 	offset := (params.Page - 1) * params.PageSize
 
-	// Get total count
+	// Build SELECT clause
+	selectClause := "*"
+	if params.Select != "" {
+		cols := strings.Split(params.Select, ",")
+		var validCols []string
+		for _, col := range cols {
+			col = strings.TrimSpace(col)
+			if isValidIdentifier(col) {
+				validCols = append(validCols, quoteIdentifier(col))
+			}
+		}
+		if len(validCols) > 0 {
+			selectClause = strings.Join(validCols, ", ")
+		}
+	}
+
+	// Build WHERE clause from filters
+	var whereClauses []string
+	var queryArgs []interface{}
+	argIndex := 1
+
+	for _, filter := range params.Filters {
+		if !isValidIdentifier(filter.Column) {
+			continue
+		}
+
+		clause, args, newIndex := buildFilterClause(filter, argIndex)
+		if clause != "" {
+			whereClauses = append(whereClauses, clause)
+			queryArgs = append(queryArgs, args...)
+			argIndex = newIndex
+		}
+	}
+
+	whereSQL := ""
+	if len(whereClauses) > 0 {
+		whereSQL = " WHERE " + strings.Join(whereClauses, " AND ")
+	}
+
+	// Get total count (with filters)
 	var totalRows int64
-	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s", quoteIdentifier(tableName))
-	if err := db.Pool.QueryRow(ctx, countQuery).Scan(&totalRows); err != nil {
+	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s%s", quoteIdentifier(tableName), whereSQL)
+	if err := db.Pool.QueryRow(ctx, countQuery, queryArgs...).Scan(&totalRows); err != nil {
 		return nil, err
 	}
 
-	// Build query
-	query := fmt.Sprintf("SELECT * FROM %s", quoteIdentifier(tableName))
+	// Build main query
+	query := fmt.Sprintf("SELECT %s FROM %s%s", selectClause, quoteIdentifier(tableName), whereSQL)
 
 	if params.OrderBy != "" && isValidIdentifier(params.OrderBy) {
 		query += fmt.Sprintf(" ORDER BY %s %s", quoteIdentifier(params.OrderBy), strings.ToUpper(params.Order))
@@ -45,7 +84,7 @@ func (db *DB) GetRows(ctx context.Context, tableName string, params models.Pagin
 
 	query += fmt.Sprintf(" LIMIT %d OFFSET %d", params.PageSize, offset)
 
-	rows, err := db.Pool.Query(ctx, query)
+	rows, err := db.Pool.Query(ctx, query, queryArgs...)
 	if err != nil {
 		return nil, err
 	}
@@ -68,6 +107,72 @@ func (db *DB) GetRows(ctx context.Context, tableName string, params models.Pagin
 		TotalRows:  totalRows,
 		TotalPages: totalPages,
 	}, nil
+}
+
+// buildFilterClause builds a SQL WHERE clause from a filter condition
+func buildFilterClause(filter models.FilterCondition, argIndex int) (string, []interface{}, int) {
+	col := quoteIdentifier(filter.Column)
+	var args []interface{}
+
+	switch strings.ToLower(filter.Operator) {
+	case "eq":
+		args = append(args, filter.Value)
+		return fmt.Sprintf("%s = $%d", col, argIndex), args, argIndex + 1
+	case "neq":
+		args = append(args, filter.Value)
+		return fmt.Sprintf("%s != $%d", col, argIndex), args, argIndex + 1
+	case "gt":
+		args = append(args, filter.Value)
+		return fmt.Sprintf("%s > $%d", col, argIndex), args, argIndex + 1
+	case "gte":
+		args = append(args, filter.Value)
+		return fmt.Sprintf("%s >= $%d", col, argIndex), args, argIndex + 1
+	case "lt":
+		args = append(args, filter.Value)
+		return fmt.Sprintf("%s < $%d", col, argIndex), args, argIndex + 1
+	case "lte":
+		args = append(args, filter.Value)
+		return fmt.Sprintf("%s <= $%d", col, argIndex), args, argIndex + 1
+	case "like":
+		args = append(args, filter.Value)
+		return fmt.Sprintf("%s LIKE $%d", col, argIndex), args, argIndex + 1
+	case "ilike":
+		args = append(args, filter.Value)
+		return fmt.Sprintf("%s ILIKE $%d", col, argIndex), args, argIndex + 1
+	case "is":
+		// For NULL checks: is.null or is.true or is.false
+		val := strings.ToLower(fmt.Sprintf("%v", filter.Value))
+		if val == "null" {
+			return fmt.Sprintf("%s IS NULL", col), nil, argIndex
+		} else if val == "true" {
+			return fmt.Sprintf("%s IS TRUE", col), nil, argIndex
+		} else if val == "false" {
+			return fmt.Sprintf("%s IS FALSE", col), nil, argIndex
+		}
+		return "", nil, argIndex
+	case "in":
+		// Value should be a slice or comma-separated string
+		var values []interface{}
+		switch v := filter.Value.(type) {
+		case []interface{}:
+			values = v
+		case string:
+			for _, s := range strings.Split(v, ",") {
+				values = append(values, strings.TrimSpace(s))
+			}
+		}
+		if len(values) == 0 {
+			return "", nil, argIndex
+		}
+		placeholders := make([]string, len(values))
+		for i, val := range values {
+			placeholders[i] = fmt.Sprintf("$%d", argIndex+i)
+			args = append(args, val)
+		}
+		return fmt.Sprintf("%s IN (%s)", col, strings.Join(placeholders, ", ")), args, argIndex + len(values)
+	default:
+		return "", nil, argIndex
+	}
 }
 
 // InsertRow inserts a new row into a table

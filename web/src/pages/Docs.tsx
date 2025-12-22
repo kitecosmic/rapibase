@@ -59,11 +59,11 @@ RapiBase is a backend-as-a-service that provides:
 
 ## Authentication Endpoints
 
-Base URL: \`/api/v1/auth/v1\`
+Base URL: \`/api/v1/auth\`
 
 ### Sign Up
 \`\`\`
-POST /api/v1/auth/v1/signup
+POST /api/v1/auth/signup
 Headers: { "apikey": "ANON_KEY", "Content-Type": "application/json" }
 Body: { "email": "user@example.com", "password": "securepass", "full_name": "John Doe" }
 
@@ -77,7 +77,7 @@ Response: {
 
 ### Sign In
 \`\`\`
-POST /api/v1/auth/v1/signin
+POST /api/v1/auth/signin
 Headers: { "apikey": "ANON_KEY", "Content-Type": "application/json" }
 Body: { "email": "user@example.com", "password": "securepass" }
 
@@ -91,7 +91,7 @@ Response: {
 
 ### Refresh Token
 \`\`\`
-POST /api/v1/auth/v1/token
+POST /api/v1/auth/token
 Headers: { "apikey": "ANON_KEY", "Content-Type": "application/json" }
 Body: { "refresh_token": "abc123..." }
 
@@ -104,7 +104,7 @@ Response: {
 
 ### Sign Out
 \`\`\`
-POST /api/v1/auth/v1/signout
+POST /api/v1/auth/signout
 Headers: { "apikey": "ANON_KEY", "Content-Type": "application/json" }
 Body: { "refresh_token": "abc123..." }
 \`\`\`
@@ -115,7 +115,7 @@ Body: { "refresh_token": "abc123..." }
 
 **Step 1: Request magic link**
 \`\`\`
-POST /api/v1/auth/v1/magiclink
+POST /api/v1/auth/magiclink
 Headers: { "apikey": "ANON_KEY", "Content-Type": "application/json" }
 Body: { 
   "email": "user@example.com",
@@ -161,7 +161,7 @@ handleCallback();
 
 **Step 1: Request verification email**
 \`\`\`
-POST /api/v1/auth/v1/resend
+POST /api/v1/auth/resend
 Headers: { "apikey": "ANON_KEY", "Content-Type": "application/json" }
 Body: { 
   "email": "user@example.com",
@@ -179,7 +179,7 @@ https://yourapp.com/verified?verified=true&email=user@example.com
 
 **Step 1: Request reset email**
 \`\`\`
-POST /api/v1/auth/v1/forgot-password
+POST /api/v1/auth/forgot-password
 Headers: { "apikey": "ANON_KEY", "Content-Type": "application/json" }
 Body: { 
   "email": "user@example.com",
@@ -195,7 +195,7 @@ https://yourapp.com/reset-password?token=abc123...
 
 **Step 3: Submit new password**
 \`\`\`
-POST /api/v1/auth/v1/reset-password
+POST /api/v1/auth/reset-password
 Headers: { "apikey": "ANON_KEY", "Content-Type": "application/json" }
 Body: { 
   "token": "abc123...",
@@ -205,11 +205,11 @@ Body: {
 
 ## REST API
 
-Base URL: \`/api/v1/rest/v1\`
+Base URL: \`/api/v1/rest\`
 
 ### With Anon Key (requires JWT)
 \`\`\`
-GET /api/v1/rest/v1/products
+GET /api/v1/rest/products
 Headers: { 
   "apikey": "ANON_KEY",
   "Authorization": "Bearer eyJhbG..."
@@ -218,7 +218,7 @@ Headers: {
 
 ### With Service Key (no JWT needed)
 \`\`\`
-GET /api/v1/rest/v1/products
+GET /api/v1/rest/products
 Headers: { "apikey": "SERVICE_KEY" }
 \`\`\`
 
@@ -226,25 +226,25 @@ Headers: { "apikey": "SERVICE_KEY" }
 
 **SELECT (GET)**
 \`\`\`
-GET /api/v1/rest/v1/{table}?page=1&page_size=50&order_by=created_at&order_dir=desc
-GET /api/v1/rest/v1/{table}?filter=status:eq:active
+GET /api/v1/rest/{table}?page=1&page_size=50&order_by=created_at&order_dir=desc
+GET /api/v1/rest/{table}?filter=status:eq:active
 \`\`\`
 
 **INSERT (POST)**
 \`\`\`
-POST /api/v1/rest/v1/{table}
+POST /api/v1/rest/{table}
 Body: { "name": "Product", "price": 99.99 }
 \`\`\`
 
 **UPDATE (PUT)**
 \`\`\`
-PUT /api/v1/rest/v1/{table}/{id}
+PUT /api/v1/rest/{table}/{id}
 Body: { "price": 149.99 }
 \`\`\`
 
 **DELETE (DELETE)**
 \`\`\`
-DELETE /api/v1/rest/v1/{table}/{id}
+DELETE /api/v1/rest/{table}/{id}
 \`\`\`
 
 ## Full Integration Example
@@ -258,7 +258,7 @@ export const ANON_KEY = 'your-anon-key';
 
 // auth.js
 export async function sendMagicLink(email) {
-  const response = await fetch(\`\${RAPIBASE_URL}/api/v1/auth/v1/magiclink\`, {
+  const response = await fetch(\`\${RAPIBASE_URL}/api/v1/auth/magiclink\`, {
     method: 'POST',
     headers: { 
       'Content-Type': 'application/json',
@@ -344,7 +344,7 @@ function Dashboard() {
   const [products, setProducts] = useState([]);
   
   useEffect(() => {
-    fetchWithAuth(\`\${RAPIBASE_URL}/api/v1/rest/v1/products\`)
+    fetchWithAuth(\`\${RAPIBASE_URL}/api/v1/rest/products\`)
       .then(res => res.json())
       .then(data => setProducts(data.data));
   }, []);
@@ -437,7 +437,7 @@ AUTH_REDIRECT_URL=https://yourapp.com
                 <div className="w-8 h-8 bg-blue-600 text-white rounded-full flex items-center justify-center font-bold">2</div>
                 <div>
                   <h3 className="font-semibold text-gray-900">Create a user</h3>
-                  <CodeBlock code={`fetch('/api/v1/auth/v1/signup', {
+                  <CodeBlock code={`fetch('/api/v1/auth/signup', {
   method: 'POST',
   headers: { 
     'Content-Type': 'application/json',
@@ -455,7 +455,7 @@ AUTH_REDIRECT_URL=https://yourapp.com
                 <div className="w-8 h-8 bg-blue-600 text-white rounded-full flex items-center justify-center font-bold">3</div>
                 <div>
                   <h3 className="font-semibold text-gray-900">Access your data</h3>
-                  <CodeBlock code={`fetch('/api/v1/rest/v1/your_table', {
+                  <CodeBlock code={`fetch('/api/v1/rest/your_table', {
   headers: { 
     'apikey': 'YOUR_ANON_KEY',
     'Authorization': 'Bearer ' + accessToken
@@ -520,7 +520,7 @@ AUTH_REDIRECT_URL=https://yourapp.com
             <div className="space-y-6">
               <div>
                 <h3 className="text-lg font-semibold text-gray-900 mb-3">Sign Up</h3>
-                <CodeBlock code={`POST /api/v1/auth/v1/signup
+                <CodeBlock code={`POST /api/v1/auth/signup
 Headers: { "apikey": "ANON_KEY", "Content-Type": "application/json" }
 Body: { 
   "email": "user@example.com", 
@@ -538,7 +538,7 @@ Response: {
 
               <div>
                 <h3 className="text-lg font-semibold text-gray-900 mb-3">Sign In</h3>
-                <CodeBlock code={`POST /api/v1/auth/v1/signin
+                <CodeBlock code={`POST /api/v1/auth/signin
 Headers: { "apikey": "ANON_KEY", "Content-Type": "application/json" }
 Body: { "email": "user@example.com", "password": "securepass" }
 
@@ -553,7 +553,7 @@ Response: {
               <div>
                 <h3 className="text-lg font-semibold text-gray-900 mb-3">Refresh Token</h3>
                 <p className="text-gray-600 mb-2">Tokens are rotated on each refresh for security.</p>
-                <CodeBlock code={`POST /api/v1/auth/v1/token
+                <CodeBlock code={`POST /api/v1/auth/token
 Headers: { "apikey": "ANON_KEY", "Content-Type": "application/json" }
 Body: { "refresh_token": "abc123..." }
 
@@ -579,7 +579,7 @@ Response: {
               <div className="space-y-4">
                 <div>
                   <p className="text-sm font-medium text-purple-800 mb-2">Step 1: Request magic link</p>
-                  <CodeBlock code={`POST /api/v1/auth/v1/magiclink
+                  <CodeBlock code={`POST /api/v1/auth/magiclink
 Headers: { "apikey": "ANON_KEY" }
 Body: { 
   "email": "user@example.com",
@@ -619,7 +619,7 @@ if (accessToken) {
               <div className="space-y-4">
                 <div>
                   <p className="text-sm font-medium text-green-800 mb-2">Request verification email</p>
-                  <CodeBlock code={`POST /api/v1/auth/v1/resend
+                  <CodeBlock code={`POST /api/v1/auth/resend
 Headers: { "apikey": "ANON_KEY" }
 Body: { "email": "user@example.com" }`} />
                 </div>
@@ -640,7 +640,7 @@ Body: { "email": "user@example.com" }`} />
               <div className="space-y-4">
                 <div>
                   <p className="text-sm font-medium text-orange-800 mb-2">Step 1: Request reset email</p>
-                  <CodeBlock code={`POST /api/v1/auth/v1/forgot-password
+                  <CodeBlock code={`POST /api/v1/auth/forgot-password
 Headers: { "apikey": "ANON_KEY" }
 Body: { "email": "user@example.com" }`} />
                 </div>
@@ -654,7 +654,7 @@ Body: { "email": "user@example.com" }`} />
 
                 <div>
                   <p className="text-sm font-medium text-orange-800 mb-2">Step 3: Submit new password</p>
-                  <CodeBlock code={`POST /api/v1/auth/v1/reset-password
+                  <CodeBlock code={`POST /api/v1/auth/reset-password
 Headers: { "apikey": "ANON_KEY" }
 Body: { 
   "token": "abc123...",
@@ -673,17 +673,17 @@ Body: {
             
             <div className="bg-gray-50 rounded-lg p-4 border">
               <p className="text-sm text-gray-600">
-                Base URL: <code className="bg-gray-200 px-2 py-1 rounded">/api/v1/rest/v1</code>
+                Base URL: <code className="bg-gray-200 px-2 py-1 rounded">/api/v1/rest</code>
               </p>
             </div>
 
             <div className="space-y-4">
               <div>
                 <h3 className="font-semibold text-gray-900 mb-2">SELECT (GET)</h3>
-                <CodeBlock code={`GET /api/v1/rest/v1/{table}
-GET /api/v1/rest/v1/{table}?page=1&page_size=50
-GET /api/v1/rest/v1/{table}?order_by=created_at&order_dir=desc
-GET /api/v1/rest/v1/{table}?filter=status:eq:active
+                <CodeBlock code={`GET /api/v1/rest/{table}
+GET /api/v1/rest/{table}?page=1&page_size=50
+GET /api/v1/rest/{table}?order_by=created_at&order_dir=desc
+GET /api/v1/rest/{table}?filter=status:eq:active
 
 Headers (Anon Key): { "apikey": "ANON_KEY", "Authorization": "Bearer TOKEN" }
 Headers (Service Key): { "apikey": "SERVICE_KEY" }`} />
@@ -691,7 +691,7 @@ Headers (Service Key): { "apikey": "SERVICE_KEY" }`} />
 
               <div>
                 <h3 className="font-semibold text-gray-900 mb-2">INSERT (POST)</h3>
-                <CodeBlock code={`POST /api/v1/rest/v1/{table}
+                <CodeBlock code={`POST /api/v1/rest/{table}
 Body: { "name": "Product", "price": 99.99 }
 
 Response: { "id": 1, "name": "Product", "price": 99.99, ... }`} />
@@ -699,7 +699,7 @@ Response: { "id": 1, "name": "Product", "price": 99.99, ... }`} />
 
               <div>
                 <h3 className="font-semibold text-gray-900 mb-2">UPDATE (PUT)</h3>
-                <CodeBlock code={`PUT /api/v1/rest/v1/{table}/{id}
+                <CodeBlock code={`PUT /api/v1/rest/{table}/{id}
 Body: { "price": 149.99 }
 
 Response: { "id": 1, "name": "Product", "price": 149.99, ... }`} />
@@ -707,7 +707,7 @@ Response: { "id": 1, "name": "Product", "price": 149.99, ... }`} />
 
               <div>
                 <h3 className="font-semibold text-gray-900 mb-2">DELETE (DELETE)</h3>
-                <CodeBlock code={`DELETE /api/v1/rest/v1/{table}/{id}
+                <CodeBlock code={`DELETE /api/v1/rest/{table}/{id}
 
 Response: { "message": "Row deleted successfully" }`} />
               </div>

@@ -23,7 +23,7 @@ import {
   Edit
 } from 'lucide-react'
 
-const API_BASE = '/api/v1'
+const API_BASE = '/api/dashboard'
 
 // Code snippets for different languages
 const getCodeSnippets = (baseUrl: string, anonKey: string, serviceKey: string) => ({
@@ -32,7 +32,7 @@ const getCodeSnippets = (baseUrl: string, anonKey: string, serviceKey: string) =
     signup: `// Sign up new user
 const ANON_KEY = '${anonKey}';
 
-const response = await fetch('${baseUrl}/api/v1/auth/v1/signup', {
+const response = await fetch('${baseUrl}/api/v1/auth/signup', {
   method: 'POST',
   headers: { 
     'Content-Type': 'application/json',
@@ -51,7 +51,7 @@ localStorage.setItem('token', token);`,
     signin: `// Sign in user
 const ANON_KEY = '${anonKey}';
 
-const response = await fetch('${baseUrl}/api/v1/auth/v1/signin', {
+const response = await fetch('${baseUrl}/api/v1/auth/signin', {
   method: 'POST',
   headers: { 
     'Content-Type': 'application/json',
@@ -76,7 +76,7 @@ const response = await fetch('${baseUrl}/api/v1/your-endpoint', {
 });`,
 
     refresh: `// Refresh token
-const response = await fetch('${baseUrl}/api/v1/auth/v1/token', {
+const response = await fetch('${baseUrl}/api/v1/auth/token', {
   method: 'POST',
   headers: { 
     'Content-Type': 'application/json',
@@ -90,7 +90,7 @@ const response = await fetch('${baseUrl}/api/v1/auth/v1/token', {
 const { token: newToken, refresh_token: newRefresh } = await response.json();`,
 
     signout: `// Sign out user
-await fetch('${baseUrl}/api/v1/auth/v1/signout', {
+await fetch('${baseUrl}/api/v1/auth/signout', {
   method: 'POST',
   headers: { 
     'Content-Type': 'application/json',
@@ -104,7 +104,7 @@ await fetch('${baseUrl}/api/v1/auth/v1/signout', {
 localStorage.removeItem('token');`,
 
     magiclink: `// Send magic link (passwordless signin)
-const response = await fetch('${baseUrl}/api/v1/auth/v1/magiclink', {
+const response = await fetch('${baseUrl}/api/v1/auth/magiclink', {
   method: 'POST',
   headers: { 
     'Content-Type': 'application/json',
@@ -121,7 +121,7 @@ const response = await fetch('${baseUrl}/api/v1/auth/v1/magiclink', {
 // https://yourapp.com/auth/callback#access_token=...&refresh_token=...`,
 
     verify: `// Resend verification email
-const response = await fetch('${baseUrl}/api/v1/auth/v1/resend', {
+const response = await fetch('${baseUrl}/api/v1/auth/resend', {
   method: 'POST',
   headers: { 
     'Content-Type': 'application/json',
@@ -137,7 +137,7 @@ const response = await fetch('${baseUrl}/api/v1/auth/v1/resend', {
 // When clicked, email_verified becomes true`,
 
     forgotPassword: `// Request password reset
-const response = await fetch('${baseUrl}/api/v1/auth/v1/forgot-password', {
+const response = await fetch('${baseUrl}/api/v1/auth/forgot-password', {
   method: 'POST',
   headers: { 
     'Content-Type': 'application/json',
@@ -150,7 +150,7 @@ const response = await fetch('${baseUrl}/api/v1/auth/v1/forgot-password', {
 });
 
 // Reset password with token
-const resetResponse = await fetch('${baseUrl}/api/v1/auth/v1/reset-password', {
+const resetResponse = await fetch('${baseUrl}/api/v1/auth/reset-password', {
   method: 'POST',
   headers: { 
     'Content-Type': 'application/json',
@@ -166,7 +166,7 @@ const resetResponse = await fetch('${baseUrl}/api/v1/auth/v1/reset-password', {
 // Use SERVICE_KEY for external automations (n8n, scripts)
 const SERVICE_KEY = '${serviceKey}';
 
-const response = await fetch('${baseUrl}/api/v1/auth/v1/users/{USER_ID}', {
+const response = await fetch('${baseUrl}/api/v1/auth/users/{USER_ID}', {
   method: 'PUT',
   headers: { 
     'Content-Type': 'application/json',
@@ -191,7 +191,7 @@ const { user } = await response.json();`,
 const SERVICE_KEY = '${serviceKey}';
 
 // Option 1: Update specific users by ID
-const response = await fetch('${baseUrl}/api/v1/auth/v1/users/bulk', {
+const response = await fetch('${baseUrl}/api/v1/auth/users/bulk', {
   method: 'POST',
   headers: { 
     'Content-Type': 'application/json',
@@ -207,7 +207,7 @@ const response = await fetch('${baseUrl}/api/v1/auth/v1/users/bulk', {
 });
 
 // Option 2: Update all users matching a filter
-const response2 = await fetch('${baseUrl}/api/v1/auth/v1/users/bulk', {
+const response2 = await fetch('${baseUrl}/api/v1/auth/users/bulk', {
   method: 'POST',
   headers: { 
     'Content-Type': 'application/json',
@@ -231,7 +231,7 @@ ANON_KEY = '${anonKey}'
 
 # Sign up new user
 response = requests.post(
-    '${baseUrl}/api/v1/auth/v1/signup',
+    '${baseUrl}/api/v1/auth/signup',
     headers={'apikey': ANON_KEY},
     json={
         'email': 'user@example.com',
@@ -251,7 +251,7 @@ ANON_KEY = '${anonKey}'
 
 # Sign in user
 response = requests.post(
-    '${baseUrl}/api/v1/auth/v1/signin',
+    '${baseUrl}/api/v1/auth/signin',
     headers={'apikey': ANON_KEY},
     json={
         'email': 'user@example.com',
@@ -273,7 +273,7 @@ response = requests.get('${baseUrl}/api/v1/your-endpoint', headers=headers)`,
 
     refresh: `# Refresh token
 response = requests.post(
-    '${baseUrl}/api/v1/auth/v1/token',
+    '${baseUrl}/api/v1/auth/token',
     headers={'apikey': ANON_KEY},
     json={'refresh_token': refresh_token}
 )
@@ -282,14 +282,14 @@ new_token = data['token']`,
 
     signout: `# Sign out user
 requests.post(
-    '${baseUrl}/api/v1/auth/v1/signout',
+    '${baseUrl}/api/v1/auth/signout',
     headers={'apikey': ANON_KEY},
     json={'refresh_token': refresh_token}
 )`,
 
     magiclink: `# Send magic link (passwordless signin)
 response = requests.post(
-    '${baseUrl}/api/v1/auth/v1/magiclink',
+    '${baseUrl}/api/v1/auth/magiclink',
     headers={'apikey': ANON_KEY},
     json={
         'email': 'user@example.com',
@@ -299,7 +299,7 @@ response = requests.post(
 
     verify: `# Resend verification email
 response = requests.post(
-    '${baseUrl}/api/v1/auth/v1/resend',
+    '${baseUrl}/api/v1/auth/resend',
     headers={'apikey': ANON_KEY},
     json={
         'email': 'user@example.com',
@@ -309,14 +309,14 @@ response = requests.post(
 
     forgotPassword: `# Request password reset
 requests.post(
-    '${baseUrl}/api/v1/auth/v1/forgot-password',
+    '${baseUrl}/api/v1/auth/forgot-password',
     headers={'apikey': ANON_KEY},
     json={'email': 'user@example.com'}
 )
 
 # Reset password with token
 requests.post(
-    '${baseUrl}/api/v1/auth/v1/reset-password',
+    '${baseUrl}/api/v1/auth/reset-password',
     headers={'apikey': ANON_KEY},
     json={
         'token': 'TOKEN_FROM_EMAIL',
@@ -328,7 +328,7 @@ requests.post(
 SERVICE_KEY = '${serviceKey}'
 
 response = requests.put(
-    '${baseUrl}/api/v1/auth/v1/users/{USER_ID}',
+    '${baseUrl}/api/v1/auth/users/{USER_ID}',
     headers={'apikey': SERVICE_KEY},
     json={
         'role': 'premium',
@@ -343,7 +343,7 @@ SERVICE_KEY = '${serviceKey}'
 
 # Option 1: Update specific users by ID
 response = requests.post(
-    '${baseUrl}/api/v1/auth/v1/users/bulk',
+    '${baseUrl}/api/v1/auth/users/bulk',
     headers={'apikey': SERVICE_KEY},
     json={
         'users': [
@@ -355,7 +355,7 @@ response = requests.post(
 
 # Option 2: Update all users matching a filter
 response = requests.post(
-    '${baseUrl}/api/v1/auth/v1/users/bulk',
+    '${baseUrl}/api/v1/auth/users/bulk',
     headers={'apikey': SERVICE_KEY},
     json={
         'filter': {'role': 'user'},
@@ -368,13 +368,13 @@ print(f"Updated {response.json()['updated']} users")`
   curl: {
     name: 'cURL',
     signup: `# Sign up new user
-curl -X POST ${baseUrl}/api/v1/auth/v1/signup \\
+curl -X POST ${baseUrl}/api/v1/auth/signup \\
   -H "Content-Type: application/json" \\
   -H "apikey: ${anonKey}" \\
   -d '{"email": "user@example.com", "password": "password123", "full_name": "John Doe"}'`,
 
     signin: `# Sign in user
-curl -X POST ${baseUrl}/api/v1/auth/v1/signin \\
+curl -X POST ${baseUrl}/api/v1/auth/signin \\
   -H "Content-Type: application/json" \\
   -H "apikey: ${anonKey}" \\
   -d '{"email": "user@example.com", "password": "password123"}'`,
@@ -385,55 +385,55 @@ curl ${baseUrl}/api/v1/your-endpoint \\
   -H "apikey: ${anonKey}"`,
 
     refresh: `# Refresh token
-curl -X POST ${baseUrl}/api/v1/auth/v1/token \\
+curl -X POST ${baseUrl}/api/v1/auth/token \\
   -H "Content-Type: application/json" \\
   -H "apikey: ${anonKey}" \\
   -d '{"refresh_token": "YOUR_REFRESH_TOKEN"}'`,
 
     signout: `# Sign out user
-curl -X POST ${baseUrl}/api/v1/auth/v1/signout \\
+curl -X POST ${baseUrl}/api/v1/auth/signout \\
   -H "Content-Type: application/json" \\
   -H "apikey: ${anonKey}" \\
   -d '{"refresh_token": "YOUR_REFRESH_TOKEN"}'`,
 
     magiclink: `# Send magic link
-curl -X POST ${baseUrl}/api/v1/auth/v1/magiclink \\
+curl -X POST ${baseUrl}/api/v1/auth/magiclink \\
   -H "Content-Type: application/json" \\
   -H "apikey: ${anonKey}" \\
   -d '{"email": "user@example.com", "redirect_url": "https://yourapp.com/callback"}'`,
 
     verify: `# Resend verification email
-curl -X POST ${baseUrl}/api/v1/auth/v1/resend \\
+curl -X POST ${baseUrl}/api/v1/auth/resend \\
   -H "Content-Type: application/json" \\
   -H "apikey: ${anonKey}" \\
   -d '{"email": "user@example.com"}'`,
 
     forgotPassword: `# Request password reset
-curl -X POST ${baseUrl}/api/v1/auth/v1/forgot-password \\
+curl -X POST ${baseUrl}/api/v1/auth/forgot-password \\
   -H "Content-Type: application/json" \\
   -H "apikey: ${anonKey}" \\
   -d '{"email": "user@example.com"}'
 
 # Reset password with token
-curl -X POST ${baseUrl}/api/v1/auth/v1/reset-password \\
+curl -X POST ${baseUrl}/api/v1/auth/reset-password \\
   -H "Content-Type: application/json" \\
   -H "apikey: ${anonKey}" \\
   -d '{"token": "TOKEN_FROM_EMAIL", "new_password": "newPassword123"}'`,
 
     updateUser: `# Update a single user
-curl -X PUT ${baseUrl}/api/v1/auth/v1/users/USER_ID \\
+curl -X PUT ${baseUrl}/api/v1/auth/users/USER_ID \\
   -H "Content-Type: application/json" \\
   -H "apikey: ${serviceKey}" \\
   -d '{"role": "premium", "metadata": {"plan": "pro"}}'`,
 
     bulkUpdate: `# Bulk update - Option 1: Update specific users by ID
-curl -X POST ${baseUrl}/api/v1/auth/v1/users/bulk \\
+curl -X POST ${baseUrl}/api/v1/auth/users/bulk \\
   -H "Content-Type: application/json" \\
   -H "apikey: ${serviceKey}" \\
   -d '{"users": [{"id": "uuid-1", "role": "premium"}, {"id": "uuid-2", "role": "premium"}]}'
 
 # Bulk update - Option 2: Update all users matching a filter
-curl -X POST ${baseUrl}/api/v1/auth/v1/users/bulk \\
+curl -X POST ${baseUrl}/api/v1/auth/users/bulk \\
   -H "Content-Type: application/json" \\
   -H "apikey: ${serviceKey}" \\
   -d '{"filter": {"role": "user"}, "update": {"role": "premium"}}'`
@@ -465,7 +465,7 @@ func signUp(email, password, fullName string) (*AuthResponse, error) {
         "full_name": fullName,
     })
     
-    req, _ := http.NewRequest("POST", "${baseUrl}/api/v1/auth/v1/signup", bytes.NewBuffer(body))
+    req, _ := http.NewRequest("POST", "${baseUrl}/api/v1/auth/signup", bytes.NewBuffer(body))
     req.Header.Set("Content-Type", "application/json")
     req.Header.Set("apikey", ANON_KEY)
     
@@ -488,7 +488,7 @@ func signIn(email, password string) (*AuthResponse, error) {
         "password": password,
     })
     
-    req, _ := http.NewRequest("POST", "${baseUrl}/api/v1/auth/v1/signin", bytes.NewBuffer(body))
+    req, _ := http.NewRequest("POST", "${baseUrl}/api/v1/auth/signin", bytes.NewBuffer(body))
     req.Header.Set("Content-Type", "application/json")
     req.Header.Set("apikey", ANON_KEY)
     
@@ -517,7 +517,7 @@ body, _ := json.Marshal(map[string]string{
     "refresh_token": refreshToken,
 })
 
-req, _ := http.NewRequest("POST", "${baseUrl}/api/v1/auth/v1/token", bytes.NewBuffer(body))
+req, _ := http.NewRequest("POST", "${baseUrl}/api/v1/auth/token", bytes.NewBuffer(body))
 req.Header.Set("Content-Type", "application/json")
 req.Header.Set("apikey", ANON_KEY)
 
@@ -529,7 +529,7 @@ body, _ := json.Marshal(map[string]string{
     "refresh_token": refreshToken,
 })
 
-req, _ := http.NewRequest("POST", "${baseUrl}/api/v1/auth/v1/signout", bytes.NewBuffer(body))
+req, _ := http.NewRequest("POST", "${baseUrl}/api/v1/auth/signout", bytes.NewBuffer(body))
 req.Header.Set("Content-Type", "application/json")
 req.Header.Set("apikey", ANON_KEY)
 
@@ -542,7 +542,7 @@ body, _ := json.Marshal(map[string]string{
     "redirect_url": "https://yourapp.com/callback",
 })
 
-req, _ := http.NewRequest("POST", "${baseUrl}/api/v1/auth/v1/magiclink", bytes.NewBuffer(body))
+req, _ := http.NewRequest("POST", "${baseUrl}/api/v1/auth/magiclink", bytes.NewBuffer(body))
 req.Header.Set("Content-Type", "application/json")
 req.Header.Set("apikey", ANON_KEY)
 
@@ -554,7 +554,7 @@ body, _ := json.Marshal(map[string]string{
     "email": "user@example.com",
 })
 
-req, _ := http.NewRequest("POST", "${baseUrl}/api/v1/auth/v1/resend", bytes.NewBuffer(body))
+req, _ := http.NewRequest("POST", "${baseUrl}/api/v1/auth/resend", bytes.NewBuffer(body))
 req.Header.Set("Content-Type", "application/json")
 req.Header.Set("apikey", ANON_KEY)
 
@@ -566,7 +566,7 @@ body, _ := json.Marshal(map[string]string{
     "email": "user@example.com",
 })
 
-req, _ := http.NewRequest("POST", "${baseUrl}/api/v1/auth/v1/forgot-password", bytes.NewBuffer(body))
+req, _ := http.NewRequest("POST", "${baseUrl}/api/v1/auth/forgot-password", bytes.NewBuffer(body))
 req.Header.Set("Content-Type", "application/json")
 req.Header.Set("apikey", ANON_KEY)
 
@@ -579,7 +579,7 @@ resetBody, _ := json.Marshal(map[string]string{
     "new_password": "newPassword123",
 })
 
-req, _ = http.NewRequest("POST", "${baseUrl}/api/v1/auth/v1/reset-password", bytes.NewBuffer(resetBody))
+req, _ = http.NewRequest("POST", "${baseUrl}/api/v1/auth/reset-password", bytes.NewBuffer(resetBody))
 req.Header.Set("Content-Type", "application/json")
 req.Header.Set("apikey", ANON_KEY)
 client.Do(req)`,
@@ -592,7 +592,7 @@ body, _ := json.Marshal(map[string]interface{}{
     "metadata": map[string]string{"plan": "pro"},
 })
 
-req, _ := http.NewRequest("PUT", "${baseUrl}/api/v1/auth/v1/users/USER_ID", bytes.NewBuffer(body))
+req, _ := http.NewRequest("PUT", "${baseUrl}/api/v1/auth/users/USER_ID", bytes.NewBuffer(body))
 req.Header.Set("Content-Type", "application/json")
 req.Header.Set("apikey", SERVICE_KEY)
 
@@ -607,7 +607,7 @@ body, _ := json.Marshal(map[string]interface{}{
     "update": map[string]string{"role": "premium"},
 })
 
-req, _ := http.NewRequest("POST", "${baseUrl}/api/v1/auth/v1/users/bulk", bytes.NewBuffer(body))
+req, _ := http.NewRequest("POST", "${baseUrl}/api/v1/auth/users/bulk", bytes.NewBuffer(body))
 req.Header.Set("Content-Type", "application/json")
 req.Header.Set("apikey", SERVICE_KEY)
 
@@ -622,7 +622,7 @@ resp, _ := client.Do(req)
 $ANON_KEY = '${anonKey}';
 
 // Sign up new user
-$ch = curl_init('${baseUrl}/api/v1/auth/v1/signup');
+$ch = curl_init('${baseUrl}/api/v1/auth/signup');
 curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
 curl_setopt($ch, CURLOPT_POST, true);
 curl_setopt($ch, CURLOPT_HTTPHEADER, [
@@ -645,7 +645,7 @@ curl_close($ch);`,
 $ANON_KEY = '${anonKey}';
 
 // Sign in user
-$ch = curl_init('${baseUrl}/api/v1/auth/v1/signin');
+$ch = curl_init('${baseUrl}/api/v1/auth/signin');
 curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
 curl_setopt($ch, CURLOPT_POST, true);
 curl_setopt($ch, CURLOPT_HTTPHEADER, [
@@ -676,7 +676,7 @@ curl_close($ch);`,
 
     refresh: `<?php
 // Refresh token
-$ch = curl_init('${baseUrl}/api/v1/auth/v1/token');
+$ch = curl_init('${baseUrl}/api/v1/auth/token');
 curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
 curl_setopt($ch, CURLOPT_POST, true);
 curl_setopt($ch, CURLOPT_HTTPHEADER, [
@@ -693,7 +693,7 @@ curl_close($ch);`,
 
     signout: `<?php
 // Sign out user
-$ch = curl_init('${baseUrl}/api/v1/auth/v1/signout');
+$ch = curl_init('${baseUrl}/api/v1/auth/signout');
 curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
 curl_setopt($ch, CURLOPT_POST, true);
 curl_setopt($ch, CURLOPT_HTTPHEADER, [
@@ -709,7 +709,7 @@ curl_close($ch);`,
 
     magiclink: `<?php
 // Send magic link
-$ch = curl_init('${baseUrl}/api/v1/auth/v1/magiclink');
+$ch = curl_init('${baseUrl}/api/v1/auth/magiclink');
 curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
 curl_setopt($ch, CURLOPT_POST, true);
 curl_setopt($ch, CURLOPT_HTTPHEADER, [
@@ -726,7 +726,7 @@ curl_close($ch);`,
 
     verify: `<?php
 // Resend verification email
-$ch = curl_init('${baseUrl}/api/v1/auth/v1/resend');
+$ch = curl_init('${baseUrl}/api/v1/auth/resend');
 curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
 curl_setopt($ch, CURLOPT_POST, true);
 curl_setopt($ch, CURLOPT_HTTPHEADER, [
@@ -742,7 +742,7 @@ curl_close($ch);`,
 
     forgotPassword: `<?php
 // Request password reset
-$ch = curl_init('${baseUrl}/api/v1/auth/v1/forgot-password');
+$ch = curl_init('${baseUrl}/api/v1/auth/forgot-password');
 curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
 curl_setopt($ch, CURLOPT_POST, true);
 curl_setopt($ch, CURLOPT_HTTPHEADER, [
@@ -756,7 +756,7 @@ curl_exec($ch);
 curl_close($ch);
 
 // Reset password with token
-$ch = curl_init('${baseUrl}/api/v1/auth/v1/reset-password');
+$ch = curl_init('${baseUrl}/api/v1/auth/reset-password');
 curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
 curl_setopt($ch, CURLOPT_POST, true);
 curl_setopt($ch, CURLOPT_HTTPHEADER, [
@@ -774,7 +774,7 @@ curl_close($ch);`,
 // Update a single user
 $SERVICE_KEY = '${serviceKey}';
 
-$ch = curl_init('${baseUrl}/api/v1/auth/v1/users/USER_ID');
+$ch = curl_init('${baseUrl}/api/v1/auth/users/USER_ID');
 curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
 curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'PUT');
 curl_setopt($ch, CURLOPT_HTTPHEADER, [
@@ -792,7 +792,7 @@ curl_close($ch);`,
 // Bulk update users by filter
 $SERVICE_KEY = '${serviceKey}';
 
-$ch = curl_init('${baseUrl}/api/v1/auth/v1/users/bulk');
+$ch = curl_init('${baseUrl}/api/v1/auth/users/bulk');
 curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
 curl_setopt($ch, CURLOPT_POST, true);
 curl_setopt($ch, CURLOPT_HTTPHEADER, [
@@ -825,7 +825,7 @@ async function fetchUsers() {
   const token = getAuthToken()
   if (!token) throw new Error('Not authenticated')
 
-  const res = await fetch(`${API_BASE}/auth/users`, {
+  const res = await fetch(`${API_BASE}/users`, {
     headers: { Authorization: `Bearer ${token}` }
   })
   if (!res.ok) throw new Error('Failed to fetch users')
@@ -836,7 +836,7 @@ async function createUser(data: { email: string; password: string; full_name?: s
   const token = getAuthToken()
   if (!token) throw new Error('Not authenticated')
 
-  const res = await fetch(`${API_BASE}/auth/users`, {
+  const res = await fetch(`${API_BASE}/users`, {
     method: 'POST',
     headers: { 
       'Content-Type': 'application/json',
@@ -855,7 +855,7 @@ async function deleteUser(id: string) {
   const token = getAuthToken()
   if (!token) throw new Error('Not authenticated')
 
-  const res = await fetch(`${API_BASE}/auth/users/${id}`, {
+  const res = await fetch(`${API_BASE}/users/${id}`, {
     method: 'DELETE',
     headers: { Authorization: `Bearer ${token}` }
   })
@@ -870,7 +870,7 @@ async function updateUser(id: string, data: Partial<User>) {
   const token = getAuthToken()
   if (!token) throw new Error('Not authenticated')
 
-  const res = await fetch(`${API_BASE}/auth/users/${id}`, {
+  const res = await fetch(`${API_BASE}/users/${id}`, {
     method: 'PUT',
     headers: { 
       'Content-Type': 'application/json',
@@ -1255,11 +1255,11 @@ export default function Auth() {
                                 {!user.email_verified && (
                                   <button
                                     onClick={async () => {
-                                      await fetch(`${API_BASE}/auth/v1/resend`, {
+                                      await fetch('/api/v1/auth/resend', {
                                         method: 'POST',
                                         headers: { 
                                           'Content-Type': 'application/json',
-                                          'apikey': anonKey
+                                          'apikey': serviceKey
                                         },
                                         body: JSON.stringify({ email: user.email })
                                       })
@@ -1273,11 +1273,11 @@ export default function Auth() {
                                 )}
                                 <button
                                   onClick={async () => {
-                                    await fetch(`${API_BASE}/auth/v1/magiclink`, {
+                                    await fetch('/api/v1/auth/magiclink', {
                                       method: 'POST',
                                       headers: { 
                                         'Content-Type': 'application/json',
-                                        'apikey': anonKey
+                                        'apikey': serviceKey
                                       },
                                       body: JSON.stringify({ email: user.email })
                                     })
@@ -1400,7 +1400,7 @@ export default function Auth() {
               <div className="mt-6 pt-4 border-t border-gray-200">
                 <h3 className="text-sm font-semibold text-gray-900 mb-2">Base URL</h3>
                 <code className="block p-2 bg-gray-100 rounded text-xs text-gray-700 break-all">
-                  {baseUrl}/api/v1/auth/v1
+                  {baseUrl}/api/v1/auth
                 </code>
               </div>
 
@@ -1457,7 +1457,7 @@ export default function Auth() {
                     <span className="inline-flex items-center px-2.5 py-1 rounded text-xs font-medium bg-green-100 text-green-700">
                       POST
                     </span>
-                    <code className="ml-2 text-sm text-gray-700">/api/v1/auth/v1/signup</code>
+                    <code className="ml-2 text-sm text-gray-700">/api/v1/auth/signup</code>
                   </div>
                   <div className="relative">
                     <pre className="bg-gray-900 text-gray-100 p-4 rounded-lg text-sm overflow-x-auto">
@@ -1504,7 +1504,7 @@ export default function Auth() {
                     <span className="inline-flex items-center px-2.5 py-1 rounded text-xs font-medium bg-green-100 text-green-700">
                       POST
                     </span>
-                    <code className="ml-2 text-sm text-gray-700">/api/v1/auth/v1/signin</code>
+                    <code className="ml-2 text-sm text-gray-700">/api/v1/auth/signin</code>
                   </div>
                   <div className="relative">
                     <pre className="bg-gray-900 text-gray-100 p-4 rounded-lg text-sm overflow-x-auto">
@@ -1565,7 +1565,7 @@ export default function Auth() {
                     <span className="inline-flex items-center px-2.5 py-1 rounded text-xs font-medium bg-green-100 text-green-700">
                       POST
                     </span>
-                    <code className="ml-2 text-sm text-gray-700">/api/v1/auth/v1/token</code>
+                    <code className="ml-2 text-sm text-gray-700">/api/v1/auth/token</code>
                   </div>
                   <div className="relative">
                     <pre className="bg-gray-900 text-gray-100 p-4 rounded-lg text-sm overflow-x-auto">
@@ -1603,7 +1603,7 @@ export default function Auth() {
                     <span className="inline-flex items-center px-2.5 py-1 rounded text-xs font-medium bg-green-100 text-green-700">
                       POST
                     </span>
-                    <code className="ml-2 text-sm text-gray-700">/api/v1/auth/v1/signout</code>
+                    <code className="ml-2 text-sm text-gray-700">/api/v1/auth/signout</code>
                   </div>
                   <div className="relative">
                     <pre className="bg-gray-900 text-gray-100 p-4 rounded-lg text-sm overflow-x-auto">
@@ -1634,7 +1634,7 @@ export default function Auth() {
                     <span className="inline-flex items-center px-2.5 py-1 rounded text-xs font-medium bg-green-100 text-green-700">
                       POST
                     </span>
-                    <code className="ml-2 text-sm text-gray-700">/api/v1/auth/v1/magiclink</code>
+                    <code className="ml-2 text-sm text-gray-700">/api/v1/auth/magiclink</code>
                   </div>
                   <div className="relative">
                     <pre className="bg-gray-900 text-gray-100 p-4 rounded-lg text-sm overflow-x-auto">
@@ -1674,7 +1674,7 @@ export default function Auth() {
                     <span className="inline-flex items-center px-2.5 py-1 rounded text-xs font-medium bg-green-100 text-green-700">
                       POST
                     </span>
-                    <code className="ml-2 text-sm text-gray-700">/api/v1/auth/v1/resend</code>
+                    <code className="ml-2 text-sm text-gray-700">/api/v1/auth/resend</code>
                   </div>
                   <div className="relative">
                     <pre className="bg-gray-900 text-gray-100 p-4 rounded-lg text-sm overflow-x-auto">
@@ -1711,9 +1711,9 @@ export default function Auth() {
                     <span className="inline-flex items-center px-2.5 py-1 rounded text-xs font-medium bg-green-100 text-green-700">
                       POST
                     </span>
-                    <code className="ml-2 text-sm text-gray-700">/api/v1/auth/v1/forgot-password</code>
+                    <code className="ml-2 text-sm text-gray-700">/api/v1/auth/forgot-password</code>
                     <span className="mx-2 text-gray-400">→</span>
-                    <code className="text-sm text-gray-700">/api/v1/auth/v1/reset-password</code>
+                    <code className="text-sm text-gray-700">/api/v1/auth/reset-password</code>
                   </div>
                   <div className="relative">
                     <pre className="bg-gray-900 text-gray-100 p-4 rounded-lg text-sm overflow-x-auto">
@@ -1753,7 +1753,7 @@ export default function Auth() {
                     <span className="inline-flex items-center px-2.5 py-1 rounded text-xs font-medium bg-blue-100 text-blue-700">
                       PUT
                     </span>
-                    <code className="ml-2 text-sm text-gray-700">/api/v1/auth/v1/users/:id</code>
+                    <code className="ml-2 text-sm text-gray-700">/api/v1/auth/users/:id</code>
                   </div>
                   <div className="relative">
                     <pre className="bg-gray-900 text-gray-100 p-4 rounded-lg text-sm overflow-x-auto">
@@ -1794,7 +1794,7 @@ export default function Auth() {
                     <span className="inline-flex items-center px-2.5 py-1 rounded text-xs font-medium bg-green-100 text-green-700">
                       POST
                     </span>
-                    <code className="ml-2 text-sm text-gray-700">/api/v1/auth/v1/users/bulk</code>
+                    <code className="ml-2 text-sm text-gray-700">/api/v1/auth/users/bulk</code>
                   </div>
                   <div className="relative">
                     <pre className="bg-gray-900 text-gray-100 p-4 rounded-lg text-sm overflow-x-auto">

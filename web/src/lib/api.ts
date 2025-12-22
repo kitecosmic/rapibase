@@ -1,6 +1,6 @@
 import { useAuthStore } from '../store/auth'
 
-const API_BASE = '/api/v1'
+const API_BASE = '/api/dashboard'
 
 class ApiError extends Error {
   constructor(public status: number, message: string) {

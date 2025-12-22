@@ -284,7 +284,7 @@ func (h *AuthUsersHandler) SendVerificationEmail(c *fiber.Ctx) error {
 	if redirectURL == "" {
 		redirectURL = h.cfg.AppURL
 	}
-	verifyURL := h.cfg.AppURL + "/api/v1/auth/v1/verify?token=" + token + "&redirect=" + url.QueryEscape(redirectURL)
+	verifyURL := h.cfg.AppURL + "/api/v1/auth/verify?token=" + token + "&redirect=" + url.QueryEscape(redirectURL)
 
 	// Send email
 	if h.cfg.IsSMTPConfigured() {
@@ -375,7 +375,7 @@ func (h *AuthUsersHandler) SendMagicLink(c *fiber.Ctx) error {
 	if redirectURL == "" {
 		redirectURL = h.cfg.AppURL
 	}
-	magicURL := h.cfg.AppURL + "/api/v1/auth/v1/magic?token=" + token + "&redirect=" + url.QueryEscape(redirectURL)
+	magicURL := h.cfg.AppURL + "/api/v1/auth/magic?token=" + token + "&redirect=" + url.QueryEscape(redirectURL)
 
 	// Send email
 	if h.cfg.IsSMTPConfigured() {

@@ -48,7 +48,7 @@ export default function TableView() {
       const parsed = JSON.parse(stored)
       const token = parsed?.state?.token
       if (!token) return null
-      const res = await fetch('/api/v1/project', {
+      const res = await fetch('/api/dashboard/project', {
         headers: { Authorization: `Bearer ${token}` }
       })
       if (!res.ok) return null
@@ -114,13 +114,13 @@ export default function TableView() {
   }
 
   // Generate API snippets for this table
-  // Uses the REST API endpoint /api/v1/rest/v1/:table with apikey
+  // Uses the REST API endpoint /api/v1/rest/:table with apikey
   const getTableSnippets = () => ({
     javascript: {
       name: 'JavaScript',
       select: `// Option 1: Client-side (user authenticated)
 const ANON_KEY = '${anonKey}';
-const response = await fetch('${baseUrl}/api/v1/rest/v1/${name}', {
+const response = await fetch('${baseUrl}/api/v1/rest/${name}', {
   headers: {
     'apikey': ANON_KEY,
     'Authorization': \`Bearer \${token}\`  // JWT from signin
@@ -129,14 +129,14 @@ const response = await fetch('${baseUrl}/api/v1/rest/v1/${name}', {
 
 // Option 2: Server-side / Admin (no user auth needed)
 const SERVICE_KEY = 'YOUR_SERVICE_KEY';  // Keep secret!
-const response = await fetch('${baseUrl}/api/v1/rest/v1/${name}', {
+const response = await fetch('${baseUrl}/api/v1/rest/${name}', {
   headers: { 'apikey': SERVICE_KEY }
 });
 
 const { data, total_rows, page, total_pages } = await response.json();`,
 
       selectFilter: `// Get rows with pagination
-const response = await fetch('${baseUrl}/api/v1/rest/v1/${name}?page=1&limit=50', {
+const response = await fetch('${baseUrl}/api/v1/rest/${name}?page=1&limit=50', {
   headers: {
     'apikey': ANON_KEY,
     'Authorization': \`Bearer \${token}\`
@@ -144,7 +144,7 @@ const response = await fetch('${baseUrl}/api/v1/rest/v1/${name}?page=1&limit=50'
 });`,
 
       insert: `// Insert a new row
-const response = await fetch('${baseUrl}/api/v1/rest/v1/${name}', {
+const response = await fetch('${baseUrl}/api/v1/rest/${name}', {
   method: 'POST',
   headers: {
     'Content-Type': 'application/json',
@@ -157,7 +157,7 @@ const response = await fetch('${baseUrl}/api/v1/rest/v1/${name}', {
 });`,
 
       update: `// Update a row by ${primaryKey}
-const response = await fetch('${baseUrl}/api/v1/rest/v1/${name}/\${${primaryKey}}', {
+const response = await fetch('${baseUrl}/api/v1/rest/${name}/\${${primaryKey}}', {
   method: 'PUT',
   headers: {
     'Content-Type': 'application/json',
@@ -170,7 +170,7 @@ const response = await fetch('${baseUrl}/api/v1/rest/v1/${name}/\${${primaryKey}
 });`,
 
       delete: `// Delete a row by ${primaryKey}
-const response = await fetch('${baseUrl}/api/v1/rest/v1/${name}/\${${primaryKey}}', {
+const response = await fetch('${baseUrl}/api/v1/rest/${name}/\${${primaryKey}}', {
   method: 'DELETE',
   headers: {
     'apikey': ANON_KEY,
@@ -181,35 +181,35 @@ const response = await fetch('${baseUrl}/api/v1/rest/v1/${name}/\${${primaryKey}
     curl: {
       name: 'cURL',
       select: `# Option 1: Client-side (user authenticated)
-curl ${baseUrl}/api/v1/rest/v1/${name} \\
+curl ${baseUrl}/api/v1/rest/${name} \\
   -H "apikey: ${anonKey}" \\
   -H "Authorization: Bearer YOUR_TOKEN"
 
 # Option 2: Server-side / Admin (no user auth needed)
-curl ${baseUrl}/api/v1/rest/v1/${name} \\
+curl ${baseUrl}/api/v1/rest/${name} \\
   -H "apikey: YOUR_SERVICE_KEY"`,
 
       selectFilter: `# Get rows with pagination
-curl "${baseUrl}/api/v1/rest/v1/${name}?page=1&limit=50" \\
+curl "${baseUrl}/api/v1/rest/${name}?page=1&limit=50" \\
   -H "apikey: ${anonKey}" \\
   -H "Authorization: Bearer YOUR_TOKEN"`,
 
       insert: `# Insert a new row
-curl -X POST ${baseUrl}/api/v1/rest/v1/${name} \\
+curl -X POST ${baseUrl}/api/v1/rest/${name} \\
   -H "Content-Type: application/json" \\
   -H "apikey: ${anonKey}" \\
   -H "Authorization: Bearer YOUR_TOKEN" \\
   -d '{ ${columns.filter((c: any) => !c.type?.includes('SERIAL')).slice(0, 2).map((c: any) => `"${c.name}": "value"`).join(', ')} }'`,
 
       update: `# Update a row
-curl -X PUT ${baseUrl}/api/v1/rest/v1/${name}/ID \\
+curl -X PUT ${baseUrl}/api/v1/rest/${name}/ID \\
   -H "Content-Type: application/json" \\
   -H "apikey: ${anonKey}" \\
   -H "Authorization: Bearer YOUR_TOKEN" \\
   -d '{ ${columns.filter((c: any) => !c.is_primary_key).slice(0, 2).map((c: any) => `"${c.name}": "new_value"`).join(', ')} }'`,
 
       delete: `# Delete a row
-curl -X DELETE ${baseUrl}/api/v1/rest/v1/${name}/ID \\
+curl -X DELETE ${baseUrl}/api/v1/rest/${name}/ID \\
   -H "apikey: ${anonKey}" \\
   -H "Authorization: Bearer YOUR_TOKEN"`
     },
@@ -224,19 +224,19 @@ headers = {
     'apikey': ANON_KEY,
     'Authorization': f'Bearer {token}'
 }
-response = requests.get('${baseUrl}/api/v1/rest/v1/${name}', headers=headers)
+response = requests.get('${baseUrl}/api/v1/rest/${name}', headers=headers)
 data = response.json()`,
 
       selectFilter: `# Get rows with pagination
 response = requests.get(
-    '${baseUrl}/api/v1/rest/v1/${name}',
+    '${baseUrl}/api/v1/rest/${name}',
     params={'page': 1, 'limit': 50},
     headers=headers
 )`,
 
       insert: `# Insert a new row
 response = requests.post(
-    '${baseUrl}/api/v1/rest/v1/${name}',
+    '${baseUrl}/api/v1/rest/${name}',
     headers=headers,
     json={
         ${columns.filter((c: any) => !c.type?.includes('SERIAL')).slice(0, 3).map((c: any) => `'${c.name}': 'value'`).join(',\n        ')}
@@ -245,7 +245,7 @@ response = requests.post(
 
       update: `# Update a row
 response = requests.put(
-    f'${baseUrl}/api/v1/rest/v1/${name}/{${primaryKey}}',
+    f'${baseUrl}/api/v1/rest/${name}/{${primaryKey}}',
     headers=headers,
     json={
         ${columns.filter((c: any) => !c.is_primary_key).slice(0, 2).map((c: any) => `'${c.name}': 'new_value'`).join(',\n        ')}
@@ -254,7 +254,7 @@ response = requests.put(
 
       delete: `# Delete a row
 response = requests.delete(
-    f'${baseUrl}/api/v1/rest/v1/${name}/{${primaryKey}}',
+    f'${baseUrl}/api/v1/rest/${name}/{${primaryKey}}',
     headers=headers
 )`
     },
@@ -271,7 +271,7 @@ import (
 const ANON_KEY = "${anonKey}"
 
 // Get all rows from ${name}
-req, _ := http.NewRequest("GET", "${baseUrl}/api/v1/rest/v1/${name}", nil)
+req, _ := http.NewRequest("GET", "${baseUrl}/api/v1/rest/${name}", nil)
 req.Header.Set("apikey", ANON_KEY)
 req.Header.Set("Authorization", "Bearer "+token)
 
@@ -283,7 +283,7 @@ body, _ := io.ReadAll(resp.Body)
 fmt.Println(string(body))`,
 
       selectFilter: `// Get rows with pagination
-req, _ := http.NewRequest("GET", "${baseUrl}/api/v1/rest/v1/${name}?page=1&limit=50", nil)
+req, _ := http.NewRequest("GET", "${baseUrl}/api/v1/rest/${name}?page=1&limit=50", nil)
 req.Header.Set("apikey", ANON_KEY)
 req.Header.Set("Authorization", "Bearer "+token)`,
 
@@ -291,7 +291,7 @@ req.Header.Set("Authorization", "Bearer "+token)`,
 import "bytes"
 
 data := []byte(\`{"${columns.filter((c: any) => !c.type?.includes('SERIAL')).slice(0, 2).map((c: any) => `${c.name}`).join('": "value", "')}": "value"}\`)
-req, _ := http.NewRequest("POST", "${baseUrl}/api/v1/rest/v1/${name}", bytes.NewBuffer(data))
+req, _ := http.NewRequest("POST", "${baseUrl}/api/v1/rest/${name}", bytes.NewBuffer(data))
 req.Header.Set("Content-Type", "application/json")
 req.Header.Set("apikey", ANON_KEY)
 req.Header.Set("Authorization", "Bearer "+token)
@@ -300,7 +300,7 @@ resp, _ := client.Do(req)`,
 
       update: `// Update a row
 data := []byte(\`{"${columns.filter((c: any) => !c.is_primary_key).slice(0, 2).map((c: any) => `${c.name}`).join('": "new_value", "')}": "new_value"}\`)
-req, _ := http.NewRequest("PUT", "${baseUrl}/api/v1/rest/v1/${name}/"+id, bytes.NewBuffer(data))
+req, _ := http.NewRequest("PUT", "${baseUrl}/api/v1/rest/${name}/"+id, bytes.NewBuffer(data))
 req.Header.Set("Content-Type", "application/json")
 req.Header.Set("apikey", ANON_KEY)
 req.Header.Set("Authorization", "Bearer "+token)
@@ -308,7 +308,7 @@ req.Header.Set("Authorization", "Bearer "+token)
 resp, _ := client.Do(req)`,
 
       delete: `// Delete a row
-req, _ := http.NewRequest("DELETE", "${baseUrl}/api/v1/rest/v1/${name}/"+id, nil)
+req, _ := http.NewRequest("DELETE", "${baseUrl}/api/v1/rest/${name}/"+id, nil)
 req.Header.Set("apikey", ANON_KEY)
 req.Header.Set("Authorization", "Bearer "+token)
 
@@ -320,7 +320,7 @@ resp, _ := client.Do(req)`
 $ANON_KEY = '${anonKey}';
 
 // Get all rows from ${name}
-$ch = curl_init('${baseUrl}/api/v1/rest/v1/${name}');
+$ch = curl_init('${baseUrl}/api/v1/rest/${name}');
 curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
 curl_setopt($ch, CURLOPT_HTTPHEADER, [
     'apikey: ' . $ANON_KEY,
@@ -332,7 +332,7 @@ $data = json_decode($response, true);
 curl_close($ch);`,
 
       selectFilter: `// Get rows with pagination
-$ch = curl_init('${baseUrl}/api/v1/rest/v1/${name}?page=1&limit=50');
+$ch = curl_init('${baseUrl}/api/v1/rest/${name}?page=1&limit=50');
 curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
 curl_setopt($ch, CURLOPT_HTTPHEADER, [
     'apikey: ' . $ANON_KEY,
@@ -340,7 +340,7 @@ curl_setopt($ch, CURLOPT_HTTPHEADER, [
 ]);`,
 
       insert: `// Insert a new row
-$ch = curl_init('${baseUrl}/api/v1/rest/v1/${name}');
+$ch = curl_init('${baseUrl}/api/v1/rest/${name}');
 curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
 curl_setopt($ch, CURLOPT_POST, true);
 curl_setopt($ch, CURLOPT_HTTPHEADER, [
@@ -355,7 +355,7 @@ curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode([
 $response = curl_exec($ch);`,
 
       update: `// Update a row
-$ch = curl_init('${baseUrl}/api/v1/rest/v1/${name}/' . $id);
+$ch = curl_init('${baseUrl}/api/v1/rest/${name}/' . $id);
 curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
 curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'PUT');
 curl_setopt($ch, CURLOPT_HTTPHEADER, [
@@ -370,7 +370,7 @@ curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode([
 $response = curl_exec($ch);`,
 
       delete: `// Delete a row
-$ch = curl_init('${baseUrl}/api/v1/rest/v1/${name}/' . $id);
+$ch = curl_init('${baseUrl}/api/v1/rest/${name}/' . $id);
 curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
 curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'DELETE');
 curl_setopt($ch, CURLOPT_HTTPHEADER, [
@@ -561,8 +561,12 @@ curl_close($ch);`
                               type="text"
                               value={editData[col.name] ?? row[col.name] ?? ''}
                               onChange={(e) => setEditData({ ...editData, [col.name]: e.target.value })}
-                              className="w-full px-2 py-1 border border-gray-300 rounded text-sm"
-                              disabled={col.is_primary_key}
+                              className={`w-full px-2 py-1 border border-gray-300 rounded text-sm ${
+                                col.is_primary_key || col.name === 'created_at' || col.name === 'updated_at' || col.type.includes('SERIAL')
+                                  ? 'bg-gray-100 text-gray-500 cursor-not-allowed'
+                                  : ''
+                              }`}
+                              disabled={col.is_primary_key || col.name === 'created_at' || col.name === 'updated_at' || col.type.includes('SERIAL')}
                             />
                           ) : (
                             <span className="truncate block max-w-xs">
@@ -731,7 +735,7 @@ curl_close($ch);`
             <div className="p-6 space-y-4">
               <div className="mb-4">
                 <span className="inline-flex items-center px-2.5 py-1 rounded text-xs font-medium bg-blue-100 text-blue-700">GET</span>
-                <code className="ml-2 text-sm text-gray-700">/api/v1/tables/{name}/rows</code>
+                <code className="ml-2 text-sm text-gray-700">/api/v1/rest/{name}</code>
               </div>
               <div className="relative">
                 <pre className="bg-gray-900 text-gray-100 p-4 rounded-lg text-sm overflow-x-auto">
@@ -747,6 +751,104 @@ curl_close($ch);`
             </div>
           </div>
 
+          {/* Query Parameters */}
+          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-200">
+              <h2 className="text-lg font-semibold text-gray-900">Query Parameters</h2>
+              <p className="text-sm text-gray-600 mt-1">Filter, paginate, and sort your data.</p>
+            </div>
+            <div className="p-6 space-y-6">
+              {/* Pagination */}
+              <div>
+                <h3 className="text-sm font-semibold text-gray-900 mb-2">Pagination</h3>
+                <div className="bg-gray-50 rounded-lg p-4 space-y-2">
+                  <div className="flex items-start gap-2">
+                    <code className="text-xs bg-gray-200 px-2 py-1 rounded">page</code>
+                    <span className="text-sm text-gray-600">Page number (default: 1)</span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <code className="text-xs bg-gray-200 px-2 py-1 rounded">page_size</code>
+                    <span className="text-sm text-gray-600">Rows per page (default: 50, max: 1000)</span>
+                  </div>
+                </div>
+                <pre className="bg-gray-900 text-gray-100 p-3 rounded-lg text-xs mt-2 overflow-x-auto">
+                  <code>{`GET /api/v1/rest/${name}?page=2&page_size=25`}</code>
+                </pre>
+              </div>
+
+              {/* Ordering */}
+              <div>
+                <h3 className="text-sm font-semibold text-gray-900 mb-2">Ordering</h3>
+                <div className="bg-gray-50 rounded-lg p-4 space-y-2">
+                  <div className="flex items-start gap-2">
+                    <code className="text-xs bg-gray-200 px-2 py-1 rounded">order_by</code>
+                    <span className="text-sm text-gray-600">Column to sort by</span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <code className="text-xs bg-gray-200 px-2 py-1 rounded">order</code>
+                    <span className="text-sm text-gray-600">Sort direction: <code className="text-xs">asc</code> or <code className="text-xs">desc</code></span>
+                  </div>
+                </div>
+                <pre className="bg-gray-900 text-gray-100 p-3 rounded-lg text-xs mt-2 overflow-x-auto">
+                  <code>{`GET /api/v1/rest/${name}?order_by=created_at&order=desc`}</code>
+                </pre>
+              </div>
+
+              {/* Select Columns */}
+              <div>
+                <h3 className="text-sm font-semibold text-gray-900 mb-2">Select Columns</h3>
+                <div className="bg-gray-50 rounded-lg p-4">
+                  <div className="flex items-start gap-2">
+                    <code className="text-xs bg-gray-200 px-2 py-1 rounded">select</code>
+                    <span className="text-sm text-gray-600">Comma-separated column names to return</span>
+                  </div>
+                </div>
+                <pre className="bg-gray-900 text-gray-100 p-3 rounded-lg text-xs mt-2 overflow-x-auto">
+                  <code>{`GET /api/v1/rest/${name}?select=id,name,price`}</code>
+                </pre>
+              </div>
+
+              {/* Filtering */}
+              <div>
+                <h3 className="text-sm font-semibold text-gray-900 mb-2">Filtering</h3>
+                <p className="text-sm text-gray-600 mb-3">Use <code className="text-xs bg-gray-200 px-1 rounded">column.operator=value</code> format</p>
+                <div className="bg-gray-50 rounded-lg p-4">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-left text-gray-500">
+                        <th className="pb-2 font-medium">Operator</th>
+                        <th className="pb-2 font-medium">Description</th>
+                        <th className="pb-2 font-medium">Example</th>
+                      </tr>
+                    </thead>
+                    <tbody className="text-gray-700">
+                      <tr><td className="py-1"><code className="text-xs bg-blue-100 px-1 rounded">eq</code></td><td>Equals</td><td><code className="text-xs">status.eq=active</code></td></tr>
+                      <tr><td className="py-1"><code className="text-xs bg-blue-100 px-1 rounded">neq</code></td><td>Not equals</td><td><code className="text-xs">status.neq=deleted</code></td></tr>
+                      <tr><td className="py-1"><code className="text-xs bg-blue-100 px-1 rounded">gt</code></td><td>Greater than</td><td><code className="text-xs">price.gt=100</code></td></tr>
+                      <tr><td className="py-1"><code className="text-xs bg-blue-100 px-1 rounded">gte</code></td><td>Greater or equal</td><td><code className="text-xs">price.gte=100</code></td></tr>
+                      <tr><td className="py-1"><code className="text-xs bg-blue-100 px-1 rounded">lt</code></td><td>Less than</td><td><code className="text-xs">stock.lt=10</code></td></tr>
+                      <tr><td className="py-1"><code className="text-xs bg-blue-100 px-1 rounded">lte</code></td><td>Less or equal</td><td><code className="text-xs">stock.lte=10</code></td></tr>
+                      <tr><td className="py-1"><code className="text-xs bg-blue-100 px-1 rounded">like</code></td><td>Pattern match (case-sensitive)</td><td><code className="text-xs">name.like=%phone%</code></td></tr>
+                      <tr><td className="py-1"><code className="text-xs bg-blue-100 px-1 rounded">ilike</code></td><td>Pattern match (case-insensitive)</td><td><code className="text-xs">name.ilike=%phone%</code></td></tr>
+                      <tr><td className="py-1"><code className="text-xs bg-blue-100 px-1 rounded">is</code></td><td>NULL/boolean check</td><td><code className="text-xs">deleted_at.is=null</code></td></tr>
+                      <tr><td className="py-1"><code className="text-xs bg-blue-100 px-1 rounded">in</code></td><td>In list</td><td><code className="text-xs">category.in=Electronics,Furniture</code></td></tr>
+                    </tbody>
+                  </table>
+                </div>
+                <pre className="bg-gray-900 text-gray-100 p-3 rounded-lg text-xs mt-2 overflow-x-auto">
+                  <code>{`# Multiple filters (AND)
+GET /api/v1/rest/${name}?category.eq=Electronics&price.gte=100&price.lte=500
+
+# Search with pattern
+GET /api/v1/rest/${name}?name.ilike=%wireless%
+
+# Combined with pagination and ordering
+GET /api/v1/rest/${name}?is_active.eq=true&order_by=price&order=asc&page=1&page_size=20`}</code>
+                </pre>
+              </div>
+            </div>
+          </div>
+
           {/* Insert */}
           <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
             <div className="px-6 py-4 border-b border-gray-200">
@@ -756,7 +858,7 @@ curl_close($ch);`
             <div className="p-6">
               <div className="mb-4">
                 <span className="inline-flex items-center px-2.5 py-1 rounded text-xs font-medium bg-green-100 text-green-700">POST</span>
-                <code className="ml-2 text-sm text-gray-700">/api/v1/tables/{name}/rows</code>
+                <code className="ml-2 text-sm text-gray-700">/api/v1/rest/{name}</code>
               </div>
               <div className="relative">
                 <pre className="bg-gray-900 text-gray-100 p-4 rounded-lg text-sm overflow-x-auto">
@@ -781,7 +883,7 @@ curl_close($ch);`
             <div className="p-6">
               <div className="mb-4">
                 <span className="inline-flex items-center px-2.5 py-1 rounded text-xs font-medium bg-yellow-100 text-yellow-700">PUT</span>
-                <code className="ml-2 text-sm text-gray-700">/api/v1/tables/{name}/rows/:id</code>
+                <code className="ml-2 text-sm text-gray-700">/api/v1/rest/{name}/:id</code>
               </div>
               <div className="relative">
                 <pre className="bg-gray-900 text-gray-100 p-4 rounded-lg text-sm overflow-x-auto">
@@ -806,7 +908,7 @@ curl_close($ch);`
             <div className="p-6">
               <div className="mb-4">
                 <span className="inline-flex items-center px-2.5 py-1 rounded text-xs font-medium bg-red-100 text-red-700">DELETE</span>
-                <code className="ml-2 text-sm text-gray-700">/api/v1/tables/{name}/rows/:id</code>
+                <code className="ml-2 text-sm text-gray-700">/api/v1/rest/{name}/:id</code>
               </div>
               <div className="relative">
                 <pre className="bg-gray-900 text-gray-100 p-4 rounded-lg text-sm overflow-x-auto">

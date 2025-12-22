@@ -744,14 +744,14 @@ function APIExamples({ copyToClipboard, copiedCode }: { copyToClipboard: (text: 
 
   const examples = {
     broadcast: {
-      curl: `curl -X POST "${baseUrl}/api/v1/push/v1/send" \\
+      curl: `curl -X POST "${baseUrl}/api/v1/push/send" \\
   -H "Content-Type: application/json" \\
   -H "apikey: ${serviceKey}" \\
   -d '{
     "title": "Hello Everyone!",
     "body": "This is a broadcast notification"
   }'`,
-      javascript: `fetch("${baseUrl}/api/v1/push/v1/send", {
+      javascript: `fetch("${baseUrl}/api/v1/push/send", {
   method: "POST",
   headers: {
     "Content-Type": "application/json",
@@ -765,7 +765,7 @@ function APIExamples({ copyToClipboard, copiedCode }: { copyToClipboard: (text: 
       python: `import requests
 
 response = requests.post(
-    "${baseUrl}/api/v1/push/v1/send",
+    "${baseUrl}/api/v1/push/send",
     headers={
         "Content-Type": "application/json",
         "apikey": "${serviceKey}"
@@ -776,7 +776,7 @@ response = requests.post(
     }
 )`,
       php: `<?php
-$ch = curl_init("${baseUrl}/api/v1/push/v1/send");
+$ch = curl_init("${baseUrl}/api/v1/push/send");
 curl_setopt($ch, CURLOPT_POST, true);
 curl_setopt($ch, CURLOPT_HTTPHEADER, [
     "Content-Type: application/json",
@@ -802,7 +802,7 @@ func main() {
         "body":  "This is a broadcast notification",
     })
     
-    req, _ := http.NewRequest("POST", "${baseUrl}/api/v1/push/v1/send", bytes.NewBuffer(payload))
+    req, _ := http.NewRequest("POST", "${baseUrl}/api/v1/push/send", bytes.NewBuffer(payload))
     req.Header.Set("Content-Type", "application/json")
     req.Header.Set("apikey", "${serviceKey}")
     
@@ -811,7 +811,7 @@ func main() {
 }`,
     },
     singleUser: {
-      curl: `curl -X POST "${baseUrl}/api/v1/push/v1/send" \\
+      curl: `curl -X POST "${baseUrl}/api/v1/push/send" \\
   -H "Content-Type: application/json" \\
   -H "apikey: ${serviceKey}" \\
   -d '{
@@ -819,7 +819,7 @@ func main() {
     "body": "This is just for you",
     "user_id": "uuid-of-user"
   }'`,
-      javascript: `fetch("${baseUrl}/api/v1/push/v1/send", {
+      javascript: `fetch("${baseUrl}/api/v1/push/send", {
   method: "POST",
   headers: {
     "Content-Type": "application/json",
@@ -834,7 +834,7 @@ func main() {
       python: `import requests
 
 response = requests.post(
-    "${baseUrl}/api/v1/push/v1/send",
+    "${baseUrl}/api/v1/push/send",
     headers={
         "Content-Type": "application/json",
         "apikey": "${serviceKey}"
@@ -846,7 +846,7 @@ response = requests.post(
     }
 )`,
       php: `<?php
-$ch = curl_init("${baseUrl}/api/v1/push/v1/send");
+$ch = curl_init("${baseUrl}/api/v1/push/send");
 curl_setopt($ch, CURLOPT_POST, true);
 curl_setopt($ch, CURLOPT_HTTPHEADER, [
     "Content-Type: application/json",
@@ -866,7 +866,7 @@ $response = curl_exec($ch);`,
 })`,
     },
     filter: {
-      curl: `curl -X POST "${baseUrl}/api/v1/push/v1/send" \\
+      curl: `curl -X POST "${baseUrl}/api/v1/push/send" \\
   -H "Content-Type: application/json" \\
   -H "apikey: ${serviceKey}" \\
   -d '{
@@ -877,7 +877,7 @@ $response = curl_exec($ch);`,
       "email_verified": true
     }
   }'`,
-      javascript: `fetch("${baseUrl}/api/v1/push/v1/send", {
+      javascript: `fetch("${baseUrl}/api/v1/push/send", {
   method: "POST",
   headers: {
     "Content-Type": "application/json",
@@ -895,7 +895,7 @@ $response = curl_exec($ch);`,
       python: `import requests
 
 response = requests.post(
-    "${baseUrl}/api/v1/push/v1/send",
+    "${baseUrl}/api/v1/push/send",
     headers={
         "Content-Type": "application/json",
         "apikey": "${serviceKey}"
@@ -910,7 +910,7 @@ response = requests.post(
     }
 )`,
       php: `<?php
-$ch = curl_init("${baseUrl}/api/v1/push/v1/send");
+$ch = curl_init("${baseUrl}/api/v1/push/send");
 curl_setopt($ch, CURLOPT_POST, true);
 curl_setopt($ch, CURLOPT_HTTPHEADER, [
     "Content-Type: application/json",
@@ -958,7 +958,7 @@ $response = curl_exec($ch);`,
         <div className="p-4 bg-gray-50 rounded-lg">
           <div className="flex items-center gap-2 mb-2">
             <span className="px-2 py-1 bg-green-100 text-green-700 text-xs font-medium rounded">POST</span>
-            <code className="text-sm text-gray-800">{baseUrl}/api/v1/push/v1/send</code>
+            <code className="text-sm text-gray-800">{baseUrl}/api/v1/push/send</code>
           </div>
           <p className="text-sm text-gray-600">
             Use your <strong>SERVICE_KEY</strong> in the <code className="bg-gray-200 px-1 rounded">apikey</code> header for full access.

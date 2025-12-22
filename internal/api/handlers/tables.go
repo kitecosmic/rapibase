@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"strings"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/rapibase/rapibase/internal/database"
@@ -127,7 +128,35 @@ func (h *TablesHandler) GetRows(c *fiber.Ctx) error {
 		PageSize: c.QueryInt("page_size", 50),
 		OrderBy:  c.Query("order_by"),
 		Order:    c.Query("order", "asc"),
+		Select:   c.Query("select"),
 	}
+
+	// Parse filters from query params
+	// Format: column.operator=value (e.g., price.gt=100, name.ilike=%phone%)
+	c.Request().URI().QueryArgs().VisitAll(func(key, value []byte) {
+		keyStr := string(key)
+		// Skip pagination params
+		if keyStr == "page" || keyStr == "page_size" || keyStr == "order_by" || keyStr == "order" || keyStr == "select" {
+			return
+		}
+
+		// Parse column.operator format
+		parts := strings.SplitN(keyStr, ".", 2)
+		if len(parts) == 2 {
+			params.Filters = append(params.Filters, models.FilterCondition{
+				Column:   parts[0],
+				Operator: parts[1],
+				Value:    string(value),
+			})
+		} else {
+			// Default to eq operator if no operator specified
+			params.Filters = append(params.Filters, models.FilterCondition{
+				Column:   keyStr,
+				Operator: "eq",
+				Value:    string(value),
+			})
+		}
+	})
 
 	result, err := h.db.GetRows(c.Context(), tableName, params)
 	if err != nil {

@@ -30,7 +30,7 @@ func SetupRoutes(app *fiber.App, db *database.DB, cfg *config.Config) *WebhookDi
 	webhooksHandler := handlers.NewWebhooksHandler(db)
 	pushHandler := handlers.NewPushHandler(db)
 
-	// API v1
+	// API v1 (Public API for third-party apps)
 	api := app.Group("/api/v1")
 
 	// Health check
@@ -41,8 +41,21 @@ func SetupRoutes(app *fiber.App, db *database.DB, cfg *config.Config) *WebhookDi
 		})
 	})
 
+	// ============================================
+	// DASHBOARD API (Admin panel - requires JWT)
+	// ============================================
+	dashboard := app.Group("/api/dashboard")
+
+	// Dashboard Auth
+	dashboardAuth := dashboard.Group("/auth")
+	dashboardAuth.Post("/login", rateLimiter.Limit(), authHandler.Login)
+	dashboardAuth.Post("/forgot-password", rateLimiter.Limit(), authHandler.ForgotPassword)
+	dashboardAuth.Post("/reset-password", rateLimiter.Limit(), authHandler.ResetPassword)
+	dashboardAuth.Post("/refresh", authHandler.RefreshToken)
+	dashboardAuth.Get("/me", authMiddleware.RequireAuth(), authHandler.Me)
+
 	// Project info endpoint (returns API keys for dashboard)
-	api.Get("/project", authMiddleware.RequireAuth(), func(c *fiber.Ctx) error {
+	dashboard.Get("/project", authMiddleware.RequireAuth(), func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{
 			"anon_key":    cfg.AnonKey,
 			"service_key": cfg.ServiceKey,
@@ -50,27 +63,18 @@ func SetupRoutes(app *fiber.App, db *database.DB, cfg *config.Config) *WebhookDi
 		})
 	})
 
-	// Auth routes (rate limited)
-	authRoutes := api.Group("/auth")
-	authRoutes.Post("/login", rateLimiter.Limit(), authHandler.Login)
-	authRoutes.Post("/forgot-password", rateLimiter.Limit(), authHandler.ForgotPassword)
-	authRoutes.Post("/reset-password", rateLimiter.Limit(), authHandler.ResetPassword)
-	authRoutes.Post("/refresh", authHandler.RefreshToken)
-	authRoutes.Get("/me", authMiddleware.RequireAuth(), authHandler.Me)
-
 	// ============================================
 	// Email callback endpoints (no API key - accessed from email links)
 	// These redirect to the user's app with tokens
-	// IMPORTANT: Must be registered BEFORE the /auth/v1 group with middleware
 	// ============================================
-	api.Get("/auth/v1/verify", authUsersHandler.VerifyEmail)
-	api.Get("/auth/v1/magic", authUsersHandler.VerifyMagicLink)
+	api.Get("/auth/verify", authUsersHandler.VerifyEmail)
+	api.Get("/auth/magic", authUsersHandler.VerifyMagicLink)
 
 	// ============================================
 	// AUTH - Public endpoints for third-party apps
 	// Requires API key (JWT optional - for signup/signin)
 	// ============================================
-	authPublic := api.Group("/auth/v1", apiKeyMiddleware.RequireAPIKeyAuthOptional())
+	authPublic := api.Group("/auth", apiKeyMiddleware.RequireAPIKeyAuthOptional())
 	authPublic.Post("/signup", rateLimiter.Limit(), authUsersHandler.SignUp)
 	authPublic.Post("/signin", rateLimiter.Limit(), authUsersHandler.SignIn)
 	authPublic.Post("/token", authUsersHandler.RefreshToken)
@@ -98,16 +102,16 @@ func SetupRoutes(app *fiber.App, db *database.DB, cfg *config.Config) *WebhookDi
 	// - ANON_KEY: Requires JWT (authenticated users only)
 	// - SERVICE_KEY: Full access without JWT (admin/backend)
 	// ============================================
-	restAPI := api.Group("/rest/v1", apiKeyMiddleware.RequireAPIKey())
+	restAPI := api.Group("/rest", apiKeyMiddleware.RequireAPIKey())
 	restAPI.Get("/:name", tablesHandler.GetRows)          // SELECT
 	restAPI.Post("/:name", tablesHandler.InsertRow)       // INSERT
 	restAPI.Put("/:name/:id", tablesHandler.UpdateRow)    // UPDATE
 	restAPI.Delete("/:name/:id", tablesHandler.DeleteRow) // DELETE
 
 	// ============================================
-	// Protected routes (require admin JWT)
+	// DASHBOARD - Protected routes (require admin JWT)
 	// ============================================
-	protected := api.Group("", authMiddleware.RequireAuth())
+	protected := dashboard.Group("", authMiddleware.RequireAuth())
 
 	// Tables routes
 	protected.Get("/tables", tablesHandler.ListTables)
@@ -131,12 +135,12 @@ func SetupRoutes(app *fiber.App, db *database.DB, cfg *config.Config) *WebhookDi
 	protected.Get("/export/:table", queryHandler.ExportTable)
 
 	// Auth users management (admin panel - uses JWT)
-	// Note: API endpoints are in /auth/v1/users (uses SERVICE_KEY)
-	protected.Get("/auth/users", authUsersHandler.ListUsers)
-	protected.Post("/auth/users", authUsersHandler.CreateUser)
-	protected.Put("/auth/users/:id", authUsersHandler.UpdateUser)
-	protected.Delete("/auth/users/:id", authUsersHandler.DeleteUser)
-	protected.Post("/auth/users/bulk", authUsersHandler.BulkUpdateUsers)
+	// Note: API endpoints are in /api/v1/auth/users (uses SERVICE_KEY)
+	protected.Get("/users", authUsersHandler.ListUsers)
+	protected.Post("/users", authUsersHandler.CreateUser)
+	protected.Put("/users/:id", authUsersHandler.UpdateUser)
+	protected.Delete("/users/:id", authUsersHandler.DeleteUser)
+	protected.Post("/users/bulk", authUsersHandler.BulkUpdateUsers)
 
 	// ============================================
 	// WEBHOOKS (admin only)
@@ -151,7 +155,7 @@ func SetupRoutes(app *fiber.App, db *database.DB, cfg *config.Config) *WebhookDi
 	protected.Patch("/webhooks/:id/toggle", webhooksHandler.ToggleWebhook)
 
 	// ============================================
-	// PUSH NOTIFICATIONS (admin only)
+	// PUSH NOTIFICATIONS CONFIG (admin only)
 	// ============================================
 	protected.Get("/push/config", pushHandler.GetPushConfigs)
 	protected.Post("/push/config/web", pushHandler.SetupWebPush)
@@ -165,7 +169,7 @@ func SetupRoutes(app *fiber.App, db *database.DB, cfg *config.Config) *WebhookDi
 	// PUSH - Client endpoints for third-party apps
 	// Requires API key + JWT (authenticated users)
 	// ============================================
-	pushAPI := api.Group("/push/v1", apiKeyMiddleware.RequireAPIKey())
+	pushAPI := api.Group("/push", apiKeyMiddleware.RequireAPIKey())
 	pushAPI.Get("/vapid", pushHandler.GetVAPIDPublicKey)
 	pushAPI.Post("/subscribe", pushHandler.Subscribe)
 	pushAPI.Delete("/subscribe", pushHandler.Unsubscribe)

@@ -91,10 +91,20 @@ type ImportRequest struct {
 
 // PaginationParams represents pagination parameters
 type PaginationParams struct {
-	Page     int    `json:"page"`
-	PageSize int    `json:"page_size"`
-	OrderBy  string `json:"order_by"`
-	Order    string `json:"order"` // asc, desc
+	Page     int               `json:"page"`
+	PageSize int               `json:"page_size"`
+	OrderBy  string            `json:"order_by"`
+	Order    string            `json:"order"` // asc, desc
+	Filters  []FilterCondition `json:"filters,omitempty"`
+	Select   string            `json:"select,omitempty"` // comma-separated column names
+}
+
+// FilterCondition represents a single filter condition
+// Operators: eq, neq, gt, gte, lt, lte, like, ilike, is, in
+type FilterCondition struct {
+	Column   string      `json:"column"`
+	Operator string      `json:"operator"`
+	Value    interface{} `json:"value"`
 }
 
 // PaginatedResponse represents a paginated response
