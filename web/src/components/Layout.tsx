@@ -1,5 +1,7 @@
 import { Outlet, Link, useLocation } from 'react-router-dom'
 import { useAuthStore } from '../store/auth'
+import { useQuery } from '@tanstack/react-query'
+import { tables } from '../lib/api'
 import { 
   Database, 
   Table2, 
@@ -14,7 +16,8 @@ import {
   Bell,
   ChevronLeft,
   ChevronRight,
-  HardDrive
+  HardDrive,
+  ChevronDown
 } from 'lucide-react'
 import { useState, useEffect } from 'react'
 
@@ -31,6 +34,7 @@ const navigation = [
 ]
 
 const SIDEBAR_COLLAPSED_KEY = 'rapibase-sidebar-collapsed'
+const TABLES_EXPANDED_KEY = 'rapibase-tables-expanded'
 
 export default function Layout() {
   const { user, logout } = useAuthStore()
@@ -40,10 +44,25 @@ export default function Layout() {
     const saved = localStorage.getItem(SIDEBAR_COLLAPSED_KEY)
     return saved === 'true'
   })
+  const [tablesExpanded, setTablesExpanded] = useState(() => {
+    const saved = localStorage.getItem(TABLES_EXPANDED_KEY)
+    return saved !== 'false' // default to true
+  })
+
+  const { data: tablesData } = useQuery({
+    queryKey: ['tables'],
+    queryFn: tables.list,
+  })
+
+  const tableList = tablesData?.tables || []
 
   useEffect(() => {
     localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(collapsed))
   }, [collapsed])
+
+  useEffect(() => {
+    localStorage.setItem(TABLES_EXPANDED_KEY, String(tablesExpanded))
+  }, [tablesExpanded])
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -84,10 +103,74 @@ export default function Layout() {
           {collapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
         </button>
 
-        <nav className={`p-2 space-y-1 ${collapsed ? 'px-2' : 'px-4'}`}>
+        <nav className={`p-2 space-y-1 ${collapsed ? 'px-2' : 'px-4'} overflow-y-auto`} style={{ maxHeight: 'calc(100vh - 180px)' }}>
           {navigation.map((item) => {
-            const isActive = location.pathname === item.href || 
-              (item.href !== '/' && location.pathname.startsWith(item.href))
+            const isActive = item.name === 'Tables' 
+              ? location.pathname === '/tables'
+              : location.pathname === item.href || 
+                (item.href !== '/' && location.pathname.startsWith(item.href))
+            
+            // Special handling for Tables item with expandable sub-items
+            if (item.name === 'Tables') {
+              return (
+                <div key={item.name}>
+                  <div className="flex items-center">
+                    <Link
+                      to={item.href}
+                      onClick={() => setSidebarOpen(false)}
+                      title={collapsed ? item.name : undefined}
+                      className={`
+                        flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium
+                        transition-colors duration-150 flex-1
+                        ${collapsed ? 'justify-center' : ''}
+                        ${isActive 
+                          ? 'bg-blue-50 text-blue-700' 
+                          : 'text-gray-700 hover:bg-gray-100'
+                        }
+                      `}
+                    >
+                      <item.icon className="w-5 h-5 flex-shrink-0" />
+                      {!collapsed && <span>{item.name}</span>}
+                    </Link>
+                    {!collapsed && tableList.length > 0 && (
+                      <button
+                        onClick={() => setTablesExpanded(!tablesExpanded)}
+                        className="p-1 text-gray-400 hover:text-gray-600 rounded"
+                      >
+                        <ChevronDown className={`w-4 h-4 transition-transform ${tablesExpanded ? '' : '-rotate-90'}`} />
+                      </button>
+                    )}
+                  </div>
+                  {/* Sub-items for tables */}
+                  {!collapsed && tablesExpanded && tableList.length > 0 && (
+                    <div className="ml-4 mt-1 space-y-0.5 border-l border-gray-200 pl-2">
+                      {tableList.map((table: any) => {
+                        const isTableActive = location.pathname === `/tables/${table.name}`
+                        return (
+                          <Link
+                            key={table.name}
+                            to={`/tables/${table.name}`}
+                            onClick={() => setSidebarOpen(false)}
+                            className={`
+                              flex items-center gap-2 px-2 py-1.5 rounded text-sm
+                              transition-colors duration-150
+                              ${isTableActive 
+                                ? 'bg-blue-50 text-blue-700 font-medium' 
+                                : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
+                              }
+                            `}
+                          >
+                            <Table2 className="w-3.5 h-3.5 flex-shrink-0" />
+                            <span className="truncate">{table.name}</span>
+                          </Link>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              )
+            }
+            
             return (
               <Link
                 key={item.name}
