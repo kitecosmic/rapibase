@@ -1,13 +1,26 @@
 import { useState, useRef } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { importExport, tables } from '../lib/api'
-import { Upload, FileJson, FileCode, Loader2, CheckCircle, AlertCircle } from 'lucide-react'
+import { Upload, FileJson, FileCode, FileSpreadsheet, Loader2, CheckCircle, AlertCircle } from 'lucide-react'
 
 export default function Import() {
   const queryClient = useQueryClient()
   const sqlFileRef = useRef<HTMLInputElement>(null)
   const jsonFileRef = useRef<HTMLInputElement>(null)
-  const [selectedTable, setSelectedTable] = useState('')
+  const csvFileRef = useRef<HTMLInputElement>(null)
+  
+  // JSON state
+  const [jsonTable, setJsonTable] = useState('')
+  const [jsonNewTableName, setJsonNewTableName] = useState('')
+  const [jsonCreateNewTable, setJsonCreateNewTable] = useState(false)
+  const [jsonAutoCreate, setJsonAutoCreate] = useState(true)
+  
+  // CSV state
+  const [csvTable, setCsvTable] = useState('')
+  const [csvNewTableName, setCsvNewTableName] = useState('')
+  const [csvCreateNewTable, setCsvCreateNewTable] = useState(false)
+  const [csvAutoCreate, setCsvAutoCreate] = useState(true)
+  
   const [result, setResult] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
 
   const { data: tablesData } = useQuery({
@@ -27,13 +40,30 @@ export default function Import() {
   })
 
   const jsonMutation = useMutation({
-    mutationFn: ({ table, file }: { table: string; file: File }) => importExport.importJSON(table, file),
+    mutationFn: ({ table, file, autoCreate }: { table: string; file: File; autoCreate: boolean }) => 
+      importExport.importJSON(table, file, autoCreate),
     onSuccess: (data) => {
       setResult({ type: 'success', message: `JSON import completed. ${data.rows_affected} rows imported.` })
       queryClient.invalidateQueries({ queryKey: ['tables'] })
+      if (jsonFileRef.current) jsonFileRef.current.value = ''
     },
     onError: (err: any) => {
       setResult({ type: 'error', message: err.message })
+      if (jsonFileRef.current) jsonFileRef.current.value = ''
+    },
+  })
+
+  const csvMutation = useMutation({
+    mutationFn: ({ table, file, autoCreate }: { table: string; file: File; autoCreate: boolean }) => 
+      importExport.importCSV(table, file, autoCreate),
+    onSuccess: (data) => {
+      setResult({ type: 'success', message: `CSV import completed. ${data.rows_affected} rows imported.` })
+      queryClient.invalidateQueries({ queryKey: ['tables'] })
+      if (csvFileRef.current) csvFileRef.current.value = ''
+    },
+    onError: (err: any) => {
+      setResult({ type: 'error', message: err.message })
+      if (csvFileRef.current) csvFileRef.current.value = ''
     },
   })
 
@@ -47,9 +77,19 @@ export default function Import() {
 
   const handleJSONUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
-    if (file && selectedTable) {
+    const tableName = jsonCreateNewTable ? jsonNewTableName : jsonTable
+    if (file && tableName) {
       setResult(null)
-      jsonMutation.mutate({ table: selectedTable, file })
+      jsonMutation.mutate({ table: tableName, file, autoCreate: jsonAutoCreate })
+    }
+  }
+
+  const handleCSVUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    const tableName = csvCreateNewTable ? csvNewTableName : csvTable
+    if (file && tableName) {
+      setResult(null)
+      csvMutation.mutate({ table: tableName, file, autoCreate: csvAutoCreate })
     }
   }
 
@@ -59,7 +99,7 @@ export default function Import() {
     <div>
       <div className="mb-8">
         <h1 className="text-2xl font-bold text-gray-900">Import Data</h1>
-        <p className="text-gray-600 mt-1">Import data from SQL or JSON files</p>
+        <p className="text-gray-600 mt-1">Import data from SQL, JSON or CSV files</p>
       </div>
 
       {result && (
@@ -123,31 +163,74 @@ export default function Import() {
             </div>
             <div>
               <h2 className="text-lg font-semibold text-gray-900">JSON Import</h2>
-              <p className="text-sm text-gray-600">Import from .json file</p>
+              <p className="text-sm text-gray-600">Import from .json file with auto-column creation</p>
             </div>
           </div>
 
           <p className="text-sm text-gray-600 mb-4">
-            Upload a JSON file containing an array of objects.
-            Each object will be inserted as a row in the selected table.
+            Upload a JSON file containing an <strong>array of objects</strong> (e.g., <code className="bg-gray-100 px-1 rounded">[{`{...}`}, {`{...}`}]</code>).
+            Each object represents a row. Columns are auto-created from JSON keys.
           </p>
 
+          <div className="grid grid-cols-2 gap-4 mb-4">
+            <div>
+              <label className="flex items-center gap-2 mb-2">
+                <input
+                  type="radio"
+                  checked={!jsonCreateNewTable}
+                  onChange={() => setJsonCreateNewTable(false)}
+                  className="text-green-600 focus:ring-green-500"
+                />
+                <span className="text-sm font-medium text-gray-700">Existing Table</span>
+              </label>
+              <select
+                value={jsonTable}
+                onChange={(e) => setJsonTable(e.target.value)}
+                disabled={jsonCreateNewTable}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none disabled:bg-gray-100 disabled:cursor-not-allowed text-sm"
+              >
+                <option value="">Select a table...</option>
+                {tableList.map((table: any) => (
+                  <option key={table.name} value={table.name}>
+                    {table.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="flex items-center gap-2 mb-2">
+                <input
+                  type="radio"
+                  checked={jsonCreateNewTable}
+                  onChange={() => setJsonCreateNewTable(true)}
+                  className="text-green-600 focus:ring-green-500"
+                />
+                <span className="text-sm font-medium text-gray-700">Create New Table</span>
+              </label>
+              <input
+                type="text"
+                value={jsonNewTableName}
+                onChange={(e) => setJsonNewTableName(e.target.value)}
+                disabled={!jsonCreateNewTable}
+                placeholder="Enter table name..."
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none disabled:bg-gray-100 disabled:cursor-not-allowed text-sm"
+              />
+            </div>
+          </div>
+
           <div className="mb-4">
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Target Table
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={jsonAutoCreate}
+                onChange={(e) => setJsonAutoCreate(e.target.checked)}
+                className="rounded text-green-600 focus:ring-green-500"
+              />
+              <span className="text-sm text-gray-700">
+                Auto-create missing columns (columns will be created as TEXT type)
+              </span>
             </label>
-            <select
-              value={selectedTable}
-              onChange={(e) => setSelectedTable(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-            >
-              <option value="">Select a table...</option>
-              {tableList.map((table: any) => (
-                <option key={table.name} value={table.name}>
-                  {table.name}
-                </option>
-              ))}
-            </select>
           </div>
 
           <input
@@ -160,7 +243,7 @@ export default function Import() {
 
           <button
             onClick={() => jsonFileRef.current?.click()}
-            disabled={jsonMutation.isPending || !selectedTable}
+            disabled={jsonMutation.isPending || (!jsonCreateNewTable && !jsonTable) || (jsonCreateNewTable && !jsonNewTableName)}
             className="w-full flex items-center justify-center gap-2 px-4 py-3 border-2 border-dashed border-gray-300 rounded-lg text-gray-600 hover:border-green-500 hover:text-green-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {jsonMutation.isPending ? (
@@ -171,13 +254,113 @@ export default function Import() {
             {jsonMutation.isPending ? 'Importing...' : 'Upload JSON File'}
           </button>
         </div>
+
+        {/* CSV Import */}
+        <div className="bg-white rounded-xl border border-gray-200 p-6 md:col-span-2">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="p-3 bg-orange-100 rounded-lg">
+              <FileSpreadsheet className="w-6 h-6 text-orange-600" />
+            </div>
+            <div>
+              <h2 className="text-lg font-semibold text-gray-900">CSV Import</h2>
+              <p className="text-sm text-gray-600">Import from .csv file with auto-column creation</p>
+            </div>
+          </div>
+
+          <p className="text-sm text-gray-600 mb-4">
+            Upload a CSV file with headers. Columns will be automatically created based on the CSV headers.
+            You can import into an existing table or create a new one.
+          </p>
+
+          <div className="grid md:grid-cols-2 gap-4 mb-4">
+            <div>
+              <label className="flex items-center gap-2 mb-2">
+                <input
+                  type="radio"
+                  checked={!csvCreateNewTable}
+                  onChange={() => setCsvCreateNewTable(false)}
+                  className="text-orange-600 focus:ring-orange-500"
+                />
+                <span className="text-sm font-medium text-gray-700">Existing Table</span>
+              </label>
+              <select
+                value={csvTable}
+                onChange={(e) => setCsvTable(e.target.value)}
+                disabled={csvCreateNewTable}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none disabled:bg-gray-100 disabled:cursor-not-allowed"
+              >
+                <option value="">Select a table...</option>
+                {tableList.map((table: any) => (
+                  <option key={table.name} value={table.name}>
+                    {table.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="flex items-center gap-2 mb-2">
+                <input
+                  type="radio"
+                  checked={csvCreateNewTable}
+                  onChange={() => setCsvCreateNewTable(true)}
+                  className="text-orange-600 focus:ring-orange-500"
+                />
+                <span className="text-sm font-medium text-gray-700">Create New Table</span>
+              </label>
+              <input
+                type="text"
+                value={csvNewTableName}
+                onChange={(e) => setCsvNewTableName(e.target.value)}
+                disabled={!csvCreateNewTable}
+                placeholder="Enter table name..."
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none disabled:bg-gray-100 disabled:cursor-not-allowed"
+              />
+            </div>
+          </div>
+
+          <div className="mb-4">
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={csvAutoCreate}
+                onChange={(e) => setCsvAutoCreate(e.target.checked)}
+                className="rounded text-orange-600 focus:ring-orange-500"
+              />
+              <span className="text-sm text-gray-700">
+                Auto-create missing columns (columns will be created as TEXT type)
+              </span>
+            </label>
+          </div>
+
+          <input
+            ref={csvFileRef}
+            type="file"
+            accept=".csv"
+            onChange={handleCSVUpload}
+            className="hidden"
+          />
+
+          <button
+            onClick={() => csvFileRef.current?.click()}
+            disabled={csvMutation.isPending || (!csvCreateNewTable && !csvTable) || (csvCreateNewTable && !csvNewTableName)}
+            className="w-full flex items-center justify-center gap-2 px-4 py-3 border-2 border-dashed border-gray-300 rounded-lg text-gray-600 hover:border-orange-500 hover:text-orange-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {csvMutation.isPending ? (
+              <Loader2 className="w-5 h-5 animate-spin" />
+            ) : (
+              <Upload className="w-5 h-5" />
+            )}
+            {csvMutation.isPending ? 'Importing...' : 'Upload CSV File'}
+          </button>
+        </div>
       </div>
 
       {/* Example formats */}
       <div className="mt-8 bg-gray-50 rounded-xl p-6">
         <h3 className="text-lg font-semibold text-gray-900 mb-4">Example Formats</h3>
         
-        <div className="grid md:grid-cols-2 gap-6">
+        <div className="grid md:grid-cols-3 gap-6">
           <div>
             <h4 className="text-sm font-medium text-gray-700 mb-2">SQL File</h4>
             <pre className="bg-gray-900 text-gray-100 p-4 rounded-lg text-xs overflow-x-auto">
@@ -205,6 +388,16 @@ VALUES ('John', 'john@example.com');`}
     "email": "jane@example.com"
   }
 ]`}
+            </pre>
+          </div>
+
+          <div>
+            <h4 className="text-sm font-medium text-gray-700 mb-2">CSV File</h4>
+            <pre className="bg-gray-900 text-gray-100 p-4 rounded-lg text-xs overflow-x-auto">
+{`name,email,age
+John,john@example.com,25
+Jane,jane@example.com,30
+Bob,bob@example.com,35`}
             </pre>
           </div>
         </div>

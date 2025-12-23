@@ -143,12 +143,30 @@ export const importExport = {
     return data
   },
 
-  importJSON: async (table: string, file: File) => {
+  importJSON: async (table: string, file: File, autoCreate: boolean = true) => {
     const { token } = useAuthStore.getState()
     const formData = new FormData()
     formData.append('file', file)
 
-    const response = await fetch(`${API_BASE}/import/json/${table}`, {
+    const response = await fetch(`${API_BASE}/import/json/${table}?auto_create=${autoCreate}`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      body: formData,
+    })
+
+    const data = await response.json()
+    if (!response.ok) throw new ApiError(response.status, data.error)
+    return data
+  },
+
+  importCSV: async (table: string, file: File, autoCreate: boolean = true) => {
+    const { token } = useAuthStore.getState()
+    const formData = new FormData()
+    formData.append('file', file)
+
+    const response = await fetch(`${API_BASE}/import/csv/${table}?auto_create=${autoCreate}`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,

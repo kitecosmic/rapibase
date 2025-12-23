@@ -102,7 +102,7 @@ func (h *QueryHandler) ImportSQL(c *fiber.Ctx) error {
 	})
 }
 
-// ImportJSON imports data from JSON
+// ImportJSON imports data from JSON with auto-column creation
 func (h *QueryHandler) ImportJSON(c *fiber.Ctx) error {
 	tableName := c.Params("table")
 	if tableName == "" {
@@ -114,12 +114,15 @@ func (h *QueryHandler) ImportJSON(c *fiber.Ctx) error {
 		})
 	}
 
+	// Check if auto-create columns is enabled (default: true)
+	autoCreate := c.Query("auto_create", "true") == "true"
+
 	// Get file from form
 	file, err := c.FormFile("file")
 	if err != nil {
 		// Try to get JSON from body
 		reader := bytes.NewReader(c.Body())
-		affected, err := h.db.ImportJSON(c.Context(), tableName, reader)
+		affected, err := h.db.ImportJSON(c.Context(), tableName, reader, autoCreate)
 		if err != nil {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 				"error": err.Error(),
@@ -141,7 +144,52 @@ func (h *QueryHandler) ImportJSON(c *fiber.Ctx) error {
 	}
 	defer f.Close()
 
-	affected, err := h.db.ImportJSON(c.Context(), tableName, f)
+	affected, err := h.db.ImportJSON(c.Context(), tableName, f, autoCreate)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": err.Error(),
+		})
+	}
+
+	return c.JSON(fiber.Map{
+		"message":       "Import completed",
+		"rows_affected": affected,
+	})
+}
+
+// ImportCSV imports data from CSV with auto-column creation
+func (h *QueryHandler) ImportCSV(c *fiber.Ctx) error {
+	tableName := c.Params("table")
+	if tableName == "" {
+		tableName = c.Query("table")
+	}
+	if tableName == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "Table name is required",
+		})
+	}
+
+	// Check if auto-create columns is enabled (default: true)
+	autoCreate := c.Query("auto_create", "true") == "true"
+
+	// Get file from form
+	file, err := c.FormFile("file")
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "CSV file is required",
+		})
+	}
+
+	// Open file
+	f, err := file.Open()
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+			"error": "Failed to open file",
+		})
+	}
+	defer f.Close()
+
+	affected, err := h.db.ImportCSV(c.Context(), tableName, f, autoCreate)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error": err.Error(),

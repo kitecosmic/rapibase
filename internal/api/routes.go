@@ -134,6 +134,8 @@ func SetupRoutes(app *fiber.App, db *database.DB, cfg *config.Config) *WebhookDi
 	protected.Post("/import/sql", queryHandler.ImportSQL)
 	protected.Post("/import/json", queryHandler.ImportJSON)
 	protected.Post("/import/json/:table", queryHandler.ImportJSON)
+	protected.Post("/import/csv", queryHandler.ImportCSV)
+	protected.Post("/import/csv/:table", queryHandler.ImportCSV)
 	protected.Get("/export/:table", queryHandler.ExportTable)
 
 	// Auth users management (admin panel - uses JWT)
