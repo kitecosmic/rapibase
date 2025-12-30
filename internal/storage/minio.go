@@ -2,8 +2,13 @@ package storage
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
+	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -13,9 +18,12 @@ import (
 )
 
 type Client struct {
-	minio       *minio.Client
-	publicMinio *minio.Client // Client configured with public URL for presigned URLs
-	publicURL   string
+	minio          *minio.Client
+	publicURL      string
+	publicEndpoint string
+	publicUseSSL   bool
+	storageAccess  string
+	storageSecret  string
 }
 
 type BucketInfo struct {
@@ -53,29 +61,17 @@ func NewClient(cfg *config.Config) (*Client, error) {
 
 	publicURL := strings.TrimSuffix(cfg.StoragePublicURL, "/")
 
-	// Create a second client for presigned URLs using public endpoint
-	var publicClient *minio.Client
-	if publicURL != "" && publicURL != "http://"+cfg.StorageEndpoint && publicURL != "https://"+cfg.StorageEndpoint {
-		// Parse public URL to get host and scheme
-		publicEndpoint := strings.TrimPrefix(strings.TrimPrefix(publicURL, "https://"), "http://")
-		useSSL := strings.HasPrefix(publicURL, "https://")
-
-		publicClient, err = minio.New(publicEndpoint, &minio.Options{
-			Creds:  credentials.NewStaticV4(cfg.StorageAccessKey, cfg.StorageSecretKey, ""),
-			Secure: useSSL,
-		})
-		if err != nil {
-			// Fall back to internal client if public client fails
-			publicClient = client
-		}
-	} else {
-		publicClient = client
-	}
+	// Parse public URL for presigned URL generation
+	publicEndpoint := strings.TrimPrefix(strings.TrimPrefix(publicURL, "https://"), "http://")
+	publicUseSSL := strings.HasPrefix(publicURL, "https://")
 
 	return &Client{
-		minio:       client,
-		publicMinio: publicClient,
-		publicURL:   publicURL,
+		minio:          client,
+		publicURL:      publicURL,
+		publicEndpoint: publicEndpoint,
+		publicUseSSL:   publicUseSSL,
+		storageAccess:  cfg.StorageAccessKey,
+		storageSecret:  cfg.StorageSecretKey,
 	}, nil
 }
 
@@ -256,13 +252,109 @@ func (c *Client) DeleteObject(ctx context.Context, bucket, key string) error {
 }
 
 func (c *Client) GetPresignedURL(ctx context.Context, bucket, key string, expiry time.Duration) (string, error) {
-	// Use public client to generate presigned URL with correct signature
-	presignedURL, err := c.publicMinio.PresignedGetObject(ctx, bucket, key, expiry, nil)
-	if err != nil {
-		return "", fmt.Errorf("failed to generate presigned URL: %w", err)
+	// Generate presigned URL with signature calculated for public endpoint
+	return c.generatePresignedURL(bucket, key, expiry)
+}
+
+// generatePresignedURL creates a presigned URL with AWS Signature V4
+// using the public endpoint so the signature matches when accessed externally
+func (c *Client) generatePresignedURL(bucket, key string, expiry time.Duration) (string, error) {
+	// Build the URL
+	scheme := "http"
+	if c.publicUseSSL {
+		scheme = "https"
 	}
 
-	return presignedURL.String(), nil
+	// URL encode the key (path)
+	encodedKey := url.PathEscape(key)
+
+	now := time.Now().UTC()
+	expirySeconds := int(expiry.Seconds())
+	datestamp := now.Format("20060102")
+	amzDate := now.Format("20060102T150405Z")
+	region := "us-east-1"
+	service := "s3"
+
+	// Create credential scope
+	credentialScope := fmt.Sprintf("%s/%s/%s/aws4_request", datestamp, region, service)
+	credential := fmt.Sprintf("%s/%s", c.storageAccess, credentialScope)
+
+	// Query parameters for presigned URL
+	queryParams := url.Values{}
+	queryParams.Set("X-Amz-Algorithm", "AWS4-HMAC-SHA256")
+	queryParams.Set("X-Amz-Credential", credential)
+	queryParams.Set("X-Amz-Date", amzDate)
+	queryParams.Set("X-Amz-Expires", fmt.Sprintf("%d", expirySeconds))
+	queryParams.Set("X-Amz-SignedHeaders", "host")
+
+	// Canonical request
+	canonicalURI := "/" + bucket + "/" + encodedKey
+	canonicalQueryString := sortedQueryString(queryParams)
+	canonicalHeaders := "host:" + c.publicEndpoint + "\n"
+	signedHeaders := "host"
+	payloadHash := "UNSIGNED-PAYLOAD"
+
+	canonicalRequest := fmt.Sprintf("%s\n%s\n%s\n%s\n%s\n%s",
+		"GET",
+		canonicalURI,
+		canonicalQueryString,
+		canonicalHeaders,
+		signedHeaders,
+		payloadHash,
+	)
+
+	// String to sign
+	canonicalRequestHash := sha256Hash(canonicalRequest)
+	stringToSign := fmt.Sprintf("%s\n%s\n%s\n%s",
+		"AWS4-HMAC-SHA256",
+		amzDate,
+		credentialScope,
+		canonicalRequestHash,
+	)
+
+	// Calculate signature
+	signingKey := getSignatureKey(c.storageSecret, datestamp, region, service)
+	signature := hex.EncodeToString(hmacSHA256(signingKey, stringToSign))
+
+	// Build final URL
+	queryParams.Set("X-Amz-Signature", signature)
+
+	finalURL := fmt.Sprintf("%s://%s%s?%s", scheme, c.publicEndpoint, canonicalURI, queryParams.Encode())
+
+	return finalURL, nil
+}
+
+func sortedQueryString(params url.Values) string {
+	keys := make([]string, 0, len(params))
+	for k := range params {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	var pairs []string
+	for _, k := range keys {
+		pairs = append(pairs, url.QueryEscape(k)+"="+url.QueryEscape(params.Get(k)))
+	}
+	return strings.Join(pairs, "&")
+}
+
+func sha256Hash(data string) string {
+	hash := sha256.Sum256([]byte(data))
+	return hex.EncodeToString(hash[:])
+}
+
+func hmacSHA256(key []byte, data string) []byte {
+	h := hmac.New(sha256.New, key)
+	h.Write([]byte(data))
+	return h.Sum(nil)
+}
+
+func getSignatureKey(secret, datestamp, region, service string) []byte {
+	kDate := hmacSHA256([]byte("AWS4"+secret), datestamp)
+	kRegion := hmacSHA256(kDate, region)
+	kService := hmacSHA256(kRegion, service)
+	kSigning := hmacSHA256(kService, "aws4_request")
+	return kSigning
 }
 
 func (c *Client) CreateFolder(ctx context.Context, bucket, path string) error {
