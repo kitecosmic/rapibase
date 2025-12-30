@@ -13,8 +13,9 @@ import (
 )
 
 type Client struct {
-	minio     *minio.Client
-	publicURL string
+	minio       *minio.Client
+	publicMinio *minio.Client // Client configured with public URL for presigned URLs
+	publicURL   string
 }
 
 type BucketInfo struct {
@@ -50,9 +51,31 @@ func NewClient(cfg *config.Config) (*Client, error) {
 		return nil, fmt.Errorf("failed to create MinIO client: %w", err)
 	}
 
+	publicURL := strings.TrimSuffix(cfg.StoragePublicURL, "/")
+
+	// Create a second client for presigned URLs using public endpoint
+	var publicClient *minio.Client
+	if publicURL != "" && publicURL != "http://"+cfg.StorageEndpoint && publicURL != "https://"+cfg.StorageEndpoint {
+		// Parse public URL to get host and scheme
+		publicEndpoint := strings.TrimPrefix(strings.TrimPrefix(publicURL, "https://"), "http://")
+		useSSL := strings.HasPrefix(publicURL, "https://")
+
+		publicClient, err = minio.New(publicEndpoint, &minio.Options{
+			Creds:  credentials.NewStaticV4(cfg.StorageAccessKey, cfg.StorageSecretKey, ""),
+			Secure: useSSL,
+		})
+		if err != nil {
+			// Fall back to internal client if public client fails
+			publicClient = client
+		}
+	} else {
+		publicClient = client
+	}
+
 	return &Client{
-		minio:     client,
-		publicURL: strings.TrimSuffix(cfg.StoragePublicURL, "/"),
+		minio:       client,
+		publicMinio: publicClient,
+		publicURL:   publicURL,
 	}, nil
 }
 
@@ -233,19 +256,13 @@ func (c *Client) DeleteObject(ctx context.Context, bucket, key string) error {
 }
 
 func (c *Client) GetPresignedURL(ctx context.Context, bucket, key string, expiry time.Duration) (string, error) {
-	presignedURL, err := c.minio.PresignedGetObject(ctx, bucket, key, expiry, nil)
+	// Use public client to generate presigned URL with correct signature
+	presignedURL, err := c.publicMinio.PresignedGetObject(ctx, bucket, key, expiry, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate presigned URL: %w", err)
 	}
 
-	// Replace internal endpoint with public URL
-	urlStr := presignedURL.String()
-	internalHost := presignedURL.Scheme + "://" + presignedURL.Host
-	if c.publicURL != "" && c.publicURL != internalHost {
-		urlStr = strings.Replace(urlStr, internalHost, c.publicURL, 1)
-	}
-
-	return urlStr, nil
+	return presignedURL.String(), nil
 }
 
 func (c *Client) CreateFolder(ctx context.Context, bucket, path string) error {
