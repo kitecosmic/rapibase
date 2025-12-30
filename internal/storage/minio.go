@@ -233,11 +233,19 @@ func (c *Client) DeleteObject(ctx context.Context, bucket, key string) error {
 }
 
 func (c *Client) GetPresignedURL(ctx context.Context, bucket, key string, expiry time.Duration) (string, error) {
-	url, err := c.minio.PresignedGetObject(ctx, bucket, key, expiry, nil)
+	presignedURL, err := c.minio.PresignedGetObject(ctx, bucket, key, expiry, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate presigned URL: %w", err)
 	}
-	return url.String(), nil
+
+	// Replace internal endpoint with public URL
+	urlStr := presignedURL.String()
+	internalHost := presignedURL.Scheme + "://" + presignedURL.Host
+	if c.publicURL != "" && c.publicURL != internalHost {
+		urlStr = strings.Replace(urlStr, internalHost, c.publicURL, 1)
+	}
+
+	return urlStr, nil
 }
 
 func (c *Client) CreateFolder(ctx context.Context, bucket, path string) error {

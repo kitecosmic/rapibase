@@ -108,6 +108,57 @@ sudo systemctl reload caddy
 
 Done! Access your site at `https://yourdomain.com`. Caddy will automatically keep your SSL certificate valid forever.
 
+### Configure Storage Domain (MinIO)
+
+If you're using the Storage feature, you'll want a separate subdomain for MinIO with SSL:
+
+1. Open the Caddy configuration file:
+```bash
+sudo nano /etc/caddy/Caddyfile
+```
+
+2. Add the MinIO configuration (replace with your domains):
+
+```caddyfile
+yourdomain.com {
+    reverse_proxy localhost:8080
+}
+
+storage.yourdomain.com {
+    reverse_proxy localhost:9000
+}
+
+minio-console.yourdomain.com {
+    reverse_proxy localhost:9001
+}
+```
+
+3. Save and reload Caddy:
+```bash
+sudo systemctl reload caddy
+```
+
+4. Update your `.env` file:
+```env
+STORAGE_PUBLIC_URL=https://storage.yourdomain.com
+STORAGE_USE_SSL=false  # Keep false, Caddy handles SSL
+
+# MinIO public URLs (required for MinIO console to generate correct links)
+MINIO_SERVER_URL=https://storage.yourdomain.com
+MINIO_BROWSER_REDIRECT_URL=https://minio-console.yourdomain.com
+```
+
+5. Restart RapiBase:
+```bash
+cd ~/rapibase
+
+docker compose down && docker compose up -d
+```
+
+Now your files will be accessible via `https://storage.yourdomain.com`.
+
+> **Note:** `STORAGE_USE_SSL=false` means the connection between RapiBase and MinIO is unencrypted (they're on the same server). Caddy handles the public SSL.
+
 ### Updating to Latest Version
 
 ```bash
