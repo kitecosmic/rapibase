@@ -7,8 +7,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"net/url"
-	"sort"
 	"strings"
 	"time"
 
@@ -265,9 +263,6 @@ func (c *Client) generatePresignedURL(bucket, key string, expiry time.Duration) 
 		scheme = "https"
 	}
 
-	// URL encode the key (path)
-	encodedKey := url.PathEscape(key)
-
 	now := time.Now().UTC()
 	expirySeconds := int(expiry.Seconds())
 	datestamp := now.Format("20060102")
@@ -279,17 +274,21 @@ func (c *Client) generatePresignedURL(bucket, key string, expiry time.Duration) 
 	credentialScope := fmt.Sprintf("%s/%s/%s/aws4_request", datestamp, region, service)
 	credential := fmt.Sprintf("%s/%s", c.storageAccess, credentialScope)
 
-	// Query parameters for presigned URL
-	queryParams := url.Values{}
-	queryParams.Set("X-Amz-Algorithm", "AWS4-HMAC-SHA256")
-	queryParams.Set("X-Amz-Credential", credential)
-	queryParams.Set("X-Amz-Date", amzDate)
-	queryParams.Set("X-Amz-Expires", fmt.Sprintf("%d", expirySeconds))
-	queryParams.Set("X-Amz-SignedHeaders", "host")
+	// Canonical URI - encode each path segment but keep slashes
+	canonicalURI := "/" + bucket + "/" + uriEncode(key, false)
 
-	// Canonical request
-	canonicalURI := "/" + bucket + "/" + encodedKey
-	canonicalQueryString := sortedQueryString(queryParams)
+	// Build canonical query string (must be sorted alphabetically)
+	// Note: credential contains slashes that must be encoded as %2F
+	canonicalQueryString := fmt.Sprintf(
+		"X-Amz-Algorithm=%s&X-Amz-Credential=%s&X-Amz-Date=%s&X-Amz-Expires=%d&X-Amz-SignedHeaders=%s",
+		"AWS4-HMAC-SHA256",
+		uriEncode(credential, true),
+		amzDate,
+		expirySeconds,
+		"host",
+	)
+
+	// Canonical headers
 	canonicalHeaders := "host:" + c.publicEndpoint + "\n"
 	signedHeaders := "host"
 	payloadHash := "UNSIGNED-PAYLOAD"
@@ -316,26 +315,28 @@ func (c *Client) generatePresignedURL(bucket, key string, expiry time.Duration) 
 	signingKey := getSignatureKey(c.storageSecret, datestamp, region, service)
 	signature := hex.EncodeToString(hmacSHA256(signingKey, stringToSign))
 
-	// Build final URL
-	queryParams.Set("X-Amz-Signature", signature)
-
-	finalURL := fmt.Sprintf("%s://%s%s?%s", scheme, c.publicEndpoint, canonicalURI, queryParams.Encode())
+	// Build final URL with same query string format
+	finalURL := fmt.Sprintf("%s://%s%s?%s&X-Amz-Signature=%s",
+		scheme, c.publicEndpoint, canonicalURI, canonicalQueryString, signature)
 
 	return finalURL, nil
 }
 
-func sortedQueryString(params url.Values) string {
-	keys := make([]string, 0, len(params))
-	for k := range params {
-		keys = append(keys, k)
+// uriEncode encodes a string according to AWS S3 URI encoding rules
+// If encodeSlash is true, forward slashes are also encoded
+func uriEncode(s string, encodeSlash bool) string {
+	var result strings.Builder
+	for _, b := range []byte(s) {
+		if (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z') || (b >= '0' && b <= '9') ||
+			b == '-' || b == '.' || b == '_' || b == '~' {
+			result.WriteByte(b)
+		} else if b == '/' && !encodeSlash {
+			result.WriteByte(b)
+		} else {
+			result.WriteString(fmt.Sprintf("%%%02X", b))
+		}
 	}
-	sort.Strings(keys)
-
-	var pairs []string
-	for _, k := range keys {
-		pairs = append(pairs, url.QueryEscape(k)+"="+url.QueryEscape(params.Get(k)))
-	}
-	return strings.Join(pairs, "&")
+	return result.String()
 }
 
 func sha256Hash(data string) string {
