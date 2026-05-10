@@ -2,7 +2,7 @@
 
 🚀 **Open-source Backend as a Service** - Similar to Supabase but simpler and faster to deploy. Authentication, REST API, and Admin Dashboard in a single binary.
 
-![RapiBase](https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat&logo=go)
+![RapiBase](https://img.shields.io/badge/Go-1.23+-00ADD8?style=flat&logo=go)
 ![License](https://img.shields.io/badge/license-AGPLv3-blue)
 
 ## Features
@@ -173,7 +173,7 @@ That's it! Docker will rebuild the image with the new code and restart the conta
 ### Manual Installation
 
 ```bash
-# Prerequisites: Go 1.21+, Node.js 20+, PostgreSQL
+# Prerequisites: Go 1.23+, Node.js 20+, PostgreSQL
 
 # Clone
 git clone https://github.com/kitecosmic/rapibase.git
