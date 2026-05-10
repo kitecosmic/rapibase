@@ -105,17 +105,35 @@ func (m *APIKeyMiddleware) RequireAPIKeyAuthOptional() fiber.Handler {
 	}
 }
 
-// RequireServiceKey requires the service key (for admin operations)
+// RequireServiceKey requires the service key. Accepts either:
+//   - the legacy `apikey: <key>` header used by the rest of the REST API, or
+//   - the standard `Authorization: Bearer <key>` header preferred by MCP
+//     clients (Claude Desktop, OpenAI Agents SDK, n8n, …) and most modern
+//     HTTP integrations.
+//
+// Both are checked against cfg.ServiceKey. ANON_KEY is intentionally not
+// accepted here — this guard is for endpoints that require admin-level
+// access, e.g. /mcp.
 func (m *APIKeyMiddleware) RequireServiceKey() fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		apiKey := c.Get("apikey")
-		if apiKey == "" {
+		key := c.Get("apikey")
+		if key == "" {
+			// Fall back to Authorization: Bearer <token>
+			if auth := c.Get("Authorization"); auth != "" {
+				parts := strings.SplitN(auth, " ", 2)
+				if len(parts) == 2 && strings.EqualFold(parts[0], "bearer") {
+					key = strings.TrimSpace(parts[1])
+				}
+			}
+		}
+
+		if key == "" {
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-				"error": "Missing API key. Service key required for this operation.",
+				"error": "Missing API key. Send the service key as 'apikey: <key>' or 'Authorization: Bearer <key>'.",
 			})
 		}
 
-		if apiKey != m.cfg.ServiceKey {
+		if key != m.cfg.ServiceKey {
 			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
 				"error": "Service key required for this operation",
 			})

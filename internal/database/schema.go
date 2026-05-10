@@ -53,6 +53,103 @@ func (db *DB) GetTables(ctx context.Context) ([]models.TableInfo, error) {
 	return tables, nil
 }
 
+// GetTablesWithColumns returns the same list as GetTables but with columns
+// and primary key populated for every table.
+//
+// Implemented with three batched queries (tables, columns, PKs) joined in
+// memory, instead of N+1 calls to GetTableSchema. Designed for callers that
+// want a complete catalogue in one round-trip — e.g. the MCP `list_tables`
+// tool that hands the catalogue to an AI agent.
+func (db *DB) GetTablesWithColumns(ctx context.Context) ([]models.TableInfo, error) {
+	tables, err := db.GetTables(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(tables) == 0 {
+		return tables, nil
+	}
+
+	names := make([]string, len(tables))
+	for i, t := range tables {
+		names[i] = t.Name
+	}
+
+	// Columns for every table in one query.
+	colRows, err := db.Pool.Query(ctx, `
+		SELECT
+			c.table_name,
+			c.column_name,
+			c.data_type,
+			c.is_nullable = 'YES' AS nullable,
+			c.column_default
+		FROM information_schema.columns c
+		WHERE c.table_schema = 'public' AND c.table_name = ANY($1)
+		ORDER BY c.table_name, c.ordinal_position
+	`, names)
+	if err != nil {
+		return nil, fmt.Errorf("fetch columns: %w", err)
+	}
+	defer colRows.Close()
+
+	colsByTable := make(map[string][]models.ColumnInfo, len(tables))
+	for colRows.Next() {
+		var (
+			tableName string
+			col       models.ColumnInfo
+		)
+		if err := colRows.Scan(&tableName, &col.Name, &col.Type, &col.Nullable, &col.DefaultValue); err != nil {
+			return nil, fmt.Errorf("scan column: %w", err)
+		}
+		colsByTable[tableName] = append(colsByTable[tableName], col)
+	}
+	if err := colRows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Primary keys for every table in one query.
+	pkRows, err := db.Pool.Query(ctx, `
+		SELECT kcu.table_name, kcu.column_name
+		FROM information_schema.table_constraints tc
+		JOIN information_schema.key_column_usage kcu
+			ON tc.constraint_name = kcu.constraint_name
+		WHERE tc.constraint_type = 'PRIMARY KEY'
+			AND tc.table_schema = 'public'
+			AND tc.table_name = ANY($1)
+	`, names)
+	if err != nil {
+		return nil, fmt.Errorf("fetch primary keys: %w", err)
+	}
+	defer pkRows.Close()
+
+	pkByTable := make(map[string]string, len(tables))
+	for pkRows.Next() {
+		var tableName, columnName string
+		if err := pkRows.Scan(&tableName, &columnName); err != nil {
+			return nil, fmt.Errorf("scan pk: %w", err)
+		}
+		pkByTable[tableName] = columnName
+	}
+	if err := pkRows.Err(); err != nil {
+		return nil, err
+	}
+
+	for i := range tables {
+		cols := colsByTable[tables[i].Name]
+		pk := pkByTable[tables[i].Name]
+		// Mark the primary-key column on each ColumnInfo for parity with
+		// GetTableSchema's output.
+		for j := range cols {
+			if cols[j].Name == pk {
+				cols[j].IsPrimaryKey = true
+			}
+		}
+		tables[i].Columns = cols
+		tables[i].PrimaryKey = pk
+	}
+
+	return tables, nil
+}
+
 // GetTableSchema returns detailed schema information for a table
 func (db *DB) GetTableSchema(ctx context.Context, tableName string) (*models.TableInfo, error) {
 	// Validate table name to prevent SQL injection

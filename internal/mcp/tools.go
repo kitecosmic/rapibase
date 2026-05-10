@@ -14,6 +14,55 @@ import (
 	"github.com/rapibase/rapibase/internal/webhooks"
 )
 
+// Tool annotations, per the MCP spec. The mark3labs/mcp-go SDK defaults
+// every tool to {readOnly:false, destructive:true, idempotent:false},
+// which makes well-behaved clients (Claude Desktop, etc.) ask for human
+// confirmation before *every* call — even pure reads. We override that by
+// classifying each tool into one of five buckets:
+//
+//   - readOnlyAnnotation: pure reads. No confirmation needed.
+//   - writeAnnotation: mutates state, every call has a fresh effect (insert).
+//   - idempotentWriteAnnotation: mutates state, repeated calls converge
+//     to the same result (update by PK, overwrite a file).
+//   - destructiveAnnotation: irreversible mutation; clients should warn.
+//   - destructiveNonIdempotentAnnotation: raw SQL — could be anything,
+//     so we pick the most conservative combination.
+//
+// OpenWorldHint is always true: every tool reaches the database or MinIO,
+// which are external systems from the model's perspective.
+var (
+	readOnlyAnnotation = mcp.ToolAnnotation{
+		ReadOnlyHint:    mcp.ToBoolPtr(true),
+		DestructiveHint: mcp.ToBoolPtr(false),
+		IdempotentHint:  mcp.ToBoolPtr(true),
+		OpenWorldHint:   mcp.ToBoolPtr(true),
+	}
+	writeAnnotation = mcp.ToolAnnotation{
+		ReadOnlyHint:    mcp.ToBoolPtr(false),
+		DestructiveHint: mcp.ToBoolPtr(false),
+		IdempotentHint:  mcp.ToBoolPtr(false),
+		OpenWorldHint:   mcp.ToBoolPtr(true),
+	}
+	idempotentWriteAnnotation = mcp.ToolAnnotation{
+		ReadOnlyHint:    mcp.ToBoolPtr(false),
+		DestructiveHint: mcp.ToBoolPtr(false),
+		IdempotentHint:  mcp.ToBoolPtr(true),
+		OpenWorldHint:   mcp.ToBoolPtr(true),
+	}
+	destructiveAnnotation = mcp.ToolAnnotation{
+		ReadOnlyHint:    mcp.ToBoolPtr(false),
+		DestructiveHint: mcp.ToBoolPtr(true),
+		IdempotentHint:  mcp.ToBoolPtr(true),
+		OpenWorldHint:   mcp.ToBoolPtr(true),
+	}
+	destructiveNonIdempotentAnnotation = mcp.ToolAnnotation{
+		ReadOnlyHint:    mcp.ToBoolPtr(false),
+		DestructiveHint: mcp.ToBoolPtr(true),
+		IdempotentHint:  mcp.ToBoolPtr(false),
+		OpenWorldHint:   mcp.ToBoolPtr(true),
+	}
+)
+
 // registerTools wires every tool into the MCP server. Grouped roughly in
 // order of intended discovery (table → CRUD → SQL → DDL → storage) so the
 // `tools/list` payload reads like a tutorial.
@@ -41,9 +90,13 @@ func (h *Handler) registerDiscoveryTools() {
 				"server-side. Call this first when the user asks about data "+
 				"without naming a specific table — the response is cheap.",
 		),
+		// WithToolAnnotation replaces the whole struct, so call it first and
+		// then layer the title on top.
+		mcp.WithToolAnnotation(readOnlyAnnotation),
+		mcp.WithTitleAnnotation("List tables"),
 	)
 	h.mcp.AddTool(listTables, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		tables, err := h.db.GetTables(ctx)
+		tables, err := h.db.GetTablesWithColumns(ctx)
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
@@ -65,6 +118,8 @@ func (h *Handler) registerDiscoveryTools() {
 			mcp.Required(),
 			mcp.Description("Exact table name (case-sensitive)."),
 		),
+		mcp.WithToolAnnotation(readOnlyAnnotation),
+		mcp.WithTitleAnnotation("Describe table"),
 	)
 	h.mcp.AddTool(describeTable, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		name, err := req.RequireString("name")
@@ -150,6 +205,8 @@ func (h *Handler) registerCRUDTools() {
 			mcp.Description("Optional WHERE-style filters. AND-combined."),
 			mcp.Items(filterItemSchema),
 		),
+		mcp.WithToolAnnotation(readOnlyAnnotation),
+		mcp.WithTitleAnnotation("Query rows"),
 	)
 	h.mcp.AddTool(queryRows, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		table, err := req.RequireString("table")
@@ -199,6 +256,8 @@ func (h *Handler) registerCRUDTools() {
 			mcp.Description("Column → value mapping. Skip auto columns (id, created_at)."),
 			mcp.AdditionalProperties(true),
 		),
+		mcp.WithToolAnnotation(writeAnnotation),
+		mcp.WithTitleAnnotation("Insert row"),
 	)
 	h.mcp.AddTool(insertRow, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		table, err := req.RequireString("table")
@@ -236,6 +295,8 @@ func (h *Handler) registerCRUDTools() {
 			mcp.Description("Partial column → value mapping. Only include columns to change."),
 			mcp.AdditionalProperties(true),
 		),
+		mcp.WithToolAnnotation(idempotentWriteAnnotation),
+		mcp.WithTitleAnnotation("Update row"),
 	)
 	h.mcp.AddTool(updateRow, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		table, err := req.RequireString("table")
@@ -278,6 +339,8 @@ func (h *Handler) registerCRUDTools() {
 			mcp.Required(),
 			mcp.Description("Primary key of the row to delete."),
 		),
+		mcp.WithToolAnnotation(destructiveAnnotation),
+		mcp.WithTitleAnnotation("Delete row"),
 	)
 	h.mcp.AddTool(deleteRow, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		table, err := req.RequireString("table")
@@ -329,6 +392,8 @@ func (h *Handler) registerSQLTools() {
 		mcp.WithArray("params",
 			mcp.Description("Positional parameters substituted for $1, $2, … in the SQL."),
 		),
+		mcp.WithToolAnnotation(destructiveNonIdempotentAnnotation),
+		mcp.WithTitleAnnotation("Execute SQL"),
 	)
 	h.mcp.AddTool(executeSQL, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		sql, err := req.RequireString("sql")
@@ -403,6 +468,8 @@ func (h *Handler) registerDDLTools() {
 			mcp.Description("Ordered list of columns."),
 			mcp.Items(createColumnSchema),
 		),
+		mcp.WithToolAnnotation(writeAnnotation),
+		mcp.WithTitleAnnotation("Create table"),
 	)
 	h.mcp.AddTool(createTable, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		name, err := req.RequireString("name")
@@ -449,6 +516,8 @@ func (h *Handler) registerDDLTools() {
 			mcp.Required(),
 			mcp.Description("Exact name of the table to drop."),
 		),
+		mcp.WithToolAnnotation(destructiveAnnotation),
+		mcp.WithTitleAnnotation("Drop table"),
 	)
 	h.mcp.AddTool(dropTable, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		name, err := req.RequireString("name")
@@ -469,6 +538,8 @@ func (h *Handler) registerDDLTools() {
 func (h *Handler) registerStorageTools() {
 	listBuckets := mcp.NewTool("list_buckets",
 		mcp.WithDescription("List every storage bucket (S3-compatible, MinIO-backed)."),
+		mcp.WithToolAnnotation(readOnlyAnnotation),
+		mcp.WithTitleAnnotation("List buckets"),
 	)
 	h.mcp.AddTool(listBuckets, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		buckets, err := h.storage.ListBuckets(ctx)
@@ -487,6 +558,8 @@ func (h *Handler) registerStorageTools() {
 		mcp.WithString("prefix",
 			mcp.Description("Optional path prefix, e.g. 'avatars/'. Default: list all."),
 		),
+		mcp.WithToolAnnotation(readOnlyAnnotation),
+		mcp.WithTitleAnnotation("List objects"),
 	)
 	h.mcp.AddTool(listObjects, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		bucket, err := req.RequireString("bucket")
@@ -515,6 +588,8 @@ func (h *Handler) registerStorageTools() {
 			mcp.Required(),
 			mcp.Description("Object key, e.g. 'avatars/me.png'."),
 		),
+		mcp.WithToolAnnotation(readOnlyAnnotation),
+		mcp.WithTitleAnnotation("Download object"),
 	)
 	h.mcp.AddTool(downloadObject, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		bucket, err := req.RequireString("bucket")
@@ -572,6 +647,8 @@ func (h *Handler) registerStorageTools() {
 			mcp.Description("MIME type. Default application/octet-stream."),
 			mcp.DefaultString("application/octet-stream"),
 		),
+		mcp.WithToolAnnotation(idempotentWriteAnnotation),
+		mcp.WithTitleAnnotation("Upload object"),
 	)
 	h.mcp.AddTool(uploadObject, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		bucket, err := req.RequireString("bucket")
@@ -610,6 +687,8 @@ func (h *Handler) registerStorageTools() {
 			mcp.Required(),
 			mcp.Description("Object key."),
 		),
+		mcp.WithToolAnnotation(destructiveAnnotation),
+		mcp.WithTitleAnnotation("Delete object"),
 	)
 	h.mcp.AddTool(deleteObject, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		bucket, err := req.RequireString("bucket")

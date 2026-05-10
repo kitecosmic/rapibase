@@ -74,6 +74,84 @@ func TestMCPHandlerListsTools(t *testing.T) {
 	}
 }
 
+// TestMCPHandlerToolAnnotations checks every registered tool has the right
+// readOnly/destructive/idempotent hints, so well-behaved clients stop asking
+// for confirmation on pure reads.
+func TestMCPHandlerToolAnnotations(t *testing.T) {
+	h := NewHandler(nil, nil, nil)
+
+	body := `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	raw, _ := io.ReadAll(rr.Body)
+	var resp struct {
+		Result struct {
+			Tools []struct {
+				Name        string `json:"name"`
+				Annotations struct {
+					Title           string `json:"title"`
+					ReadOnlyHint    *bool  `json:"readOnlyHint"`
+					DestructiveHint *bool  `json:"destructiveHint"`
+					IdempotentHint  *bool  `json:"idempotentHint"`
+				} `json:"annotations"`
+			} `json:"tools"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		t.Fatalf("invalid JSON-RPC response: %v\nbody=%s", err, raw)
+	}
+
+	type expect struct {
+		readOnly, destructive, idempotent bool
+		title                             string
+	}
+	want := map[string]expect{
+		"list_tables":     {readOnly: true, destructive: false, idempotent: true, title: "List tables"},
+		"describe_table":  {readOnly: true, destructive: false, idempotent: true, title: "Describe table"},
+		"query_rows":      {readOnly: true, destructive: false, idempotent: true, title: "Query rows"},
+		"insert_row":      {readOnly: false, destructive: false, idempotent: false, title: "Insert row"},
+		"update_row":      {readOnly: false, destructive: false, idempotent: true, title: "Update row"},
+		"delete_row":      {readOnly: false, destructive: true, idempotent: true, title: "Delete row"},
+		"execute_sql":     {readOnly: false, destructive: true, idempotent: false, title: "Execute SQL"},
+		"create_table":    {readOnly: false, destructive: false, idempotent: false, title: "Create table"},
+		"drop_table":      {readOnly: false, destructive: true, idempotent: true, title: "Drop table"},
+	}
+
+	got := map[string]struct {
+		readOnly, destructive, idempotent bool
+		title                             string
+	}{}
+	for _, tool := range resp.Result.Tools {
+		got[tool.Name] = struct {
+			readOnly, destructive, idempotent bool
+			title                             string
+		}{
+			readOnly:    tool.Annotations.ReadOnlyHint != nil && *tool.Annotations.ReadOnlyHint,
+			destructive: tool.Annotations.DestructiveHint != nil && *tool.Annotations.DestructiveHint,
+			idempotent:  tool.Annotations.IdempotentHint != nil && *tool.Annotations.IdempotentHint,
+			title:       tool.Annotations.Title,
+		}
+	}
+	for name, w := range want {
+		g, ok := got[name]
+		if !ok {
+			t.Errorf("tool %q missing from tools/list", name)
+			continue
+		}
+		if g.readOnly != w.readOnly || g.destructive != w.destructive || g.idempotent != w.idempotent {
+			t.Errorf("tool %q hints: got readOnly=%v destructive=%v idempotent=%v, want readOnly=%v destructive=%v idempotent=%v",
+				name, g.readOnly, g.destructive, g.idempotent, w.readOnly, w.destructive, w.idempotent)
+		}
+		if g.title != w.title {
+			t.Errorf("tool %q title: got %q, want %q", name, g.title, w.title)
+		}
+	}
+}
+
 // TestMCPHandlerListsResources confirms the rapibase://tables resource and
 // the rapibase://tables/{name} template are advertised.
 func TestMCPHandlerListsResources(t *testing.T) {
