@@ -12,26 +12,65 @@ import {
   Download,
   ChevronLeft,
   ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
   Loader2,
   Code,
   Table2,
   Copy,
   Check,
+  Filter as FilterIcon,
 } from 'lucide-react'
 
 type TabType = 'data' | 'api'
+
+type RowFilter = { column: string; operator: string; value: string }
+
+const FILTER_OPERATORS: { value: string; label: string; placeholder?: string }[] = [
+  { value: 'eq', label: '=' },
+  { value: 'neq', label: '!=' },
+  { value: 'gt', label: '>' },
+  { value: 'gte', label: '>=' },
+  { value: 'lt', label: '<' },
+  { value: 'lte', label: '<=' },
+  { value: 'like', label: 'like', placeholder: '%text%' },
+  { value: 'ilike', label: 'ilike', placeholder: '%text%' },
+  { value: 'is', label: 'is', placeholder: 'null | true | false' },
+  { value: 'in', label: 'in', placeholder: 'a,b,c' },
+]
+
+function getPageNumbers(current: number, total: number): (number | 'ellipsis')[] {
+  if (total <= 1) return [1]
+  const delta = 1
+  const pages = new Set<number>([1, total, current])
+  for (let i = current - delta; i <= current + delta; i++) {
+    if (i > 1 && i < total) pages.add(i)
+  }
+  const sorted = Array.from(pages).sort((a, b) => a - b)
+  const result: (number | 'ellipsis')[] = []
+  let prev = 0
+  for (const p of sorted) {
+    if (prev && p - prev > 1) result.push('ellipsis')
+    result.push(p)
+    prev = p
+  }
+  return result
+}
 
 export default function TableView() {
   const { name } = useParams<{ name: string }>()
   const queryClient = useQueryClient()
   const [activeTab, setActiveTab] = useState<TabType>('data')
   const [page, setPage] = useState(1)
+  const [pageInput, setPageInput] = useState('')
   const [editingRow, setEditingRow] = useState<any>(null)
   const [editData, setEditData] = useState<any>({})
   const [showInsert, setShowInsert] = useState(false)
   const [insertData, setInsertData] = useState<any>({})
   const [selectedLang, setSelectedLang] = useState('javascript')
   const [copiedCode, setCopiedCode] = useState<string | null>(null)
+  const [draftFilters, setDraftFilters] = useState<RowFilter[]>([])
+  const [appliedFilters, setAppliedFilters] = useState<RowFilter[]>([])
 
   const { data: schema } = useQuery({
     queryKey: ['table-schema', name],
@@ -59,8 +98,8 @@ export default function TableView() {
   const anonKey = projectData?.anon_key || 'YOUR_ANON_KEY'
 
   const { data: rowsData, isLoading } = useQuery({
-    queryKey: ['table-rows', name, page],
-    queryFn: () => tables.getRows(name!, page, 50),
+    queryKey: ['table-rows', name, page, appliedFilters],
+    queryFn: () => tables.getRows(name!, page, 50, undefined, undefined, appliedFilters),
     enabled: !!name,
   })
 
@@ -90,6 +129,43 @@ export default function TableView() {
       queryClient.invalidateQueries({ queryKey: ['tables'] })
     },
   })
+
+  const addFilter = () => {
+    const firstCol = (schema?.columns || [])[0]?.name || ''
+    setDraftFilters([...draftFilters, { column: firstCol, operator: 'ilike', value: '' }])
+  }
+
+  const updateFilter = (idx: number, patch: Partial<RowFilter>) => {
+    setDraftFilters(draftFilters.map((f, i) => (i === idx ? { ...f, ...patch } : f)))
+  }
+
+  const removeFilter = (idx: number) => {
+    const next = draftFilters.filter((_, i) => i !== idx)
+    setDraftFilters(next)
+    // If user removes a filter that was applied, re-sync immediately so the result reflects it.
+    if (appliedFilters.length > 0) {
+      setAppliedFilters(next)
+      setPage(1)
+    }
+  }
+
+  const applyFilters = () => {
+    setAppliedFilters(draftFilters.filter(f => f.column && (f.operator === 'is' || f.value !== '')))
+    setPage(1)
+  }
+
+  const clearFilters = () => {
+    setDraftFilters([])
+    setAppliedFilters([])
+    setPage(1)
+  }
+
+  const goToPage = (n: number) => {
+    if (Number.isFinite(n) && n >= 1 && n <= (rowsData?.total_pages || 1)) {
+      setPage(n)
+      setPageInput('')
+    }
+  }
 
   const handleExport = async (format: 'json' | 'sql') => {
     const blob = await importExport.exportTable(name!, format)
@@ -515,6 +591,91 @@ curl_close($ch);`
         </div>
       )}
 
+      {/* Filters bar (Data tab only) */}
+      {activeTab === 'data' && (
+        <div className="bg-white border border-gray-200 rounded-xl mb-4 p-4">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <FilterIcon className="w-4 h-4 text-gray-500" />
+              <span className="text-sm font-medium text-gray-700">Filters</span>
+              {appliedFilters.length > 0 && (
+                <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded">
+                  {appliedFilters.length} active
+                </span>
+              )}
+            </div>
+            <button
+              onClick={addFilter}
+              className="flex items-center gap-1 px-2 py-1 text-xs text-blue-700 hover:bg-blue-50 rounded transition-colors"
+            >
+              <Plus className="w-3 h-3" />
+              Add filter
+            </button>
+          </div>
+          {draftFilters.length === 0 ? (
+            <p className="text-xs text-gray-500">No filters. Click "Add filter" to narrow the results.</p>
+          ) : (
+            <div className="space-y-2">
+              {draftFilters.map((f, idx) => {
+                const op = FILTER_OPERATORS.find(o => o.value === f.operator)
+                return (
+                  <div key={idx} className="flex items-center gap-2 flex-wrap">
+                    <select
+                      value={f.column}
+                      onChange={(e) => updateFilter(idx, { column: e.target.value })}
+                      className="px-2 py-1.5 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none min-w-[10rem]"
+                    >
+                      <option value="">column…</option>
+                      {columns.map((c: any) => (
+                        <option key={c.name} value={c.name}>{c.name}</option>
+                      ))}
+                    </select>
+                    <select
+                      value={f.operator}
+                      onChange={(e) => updateFilter(idx, { operator: e.target.value })}
+                      className="px-2 py-1.5 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none w-24"
+                    >
+                      {FILTER_OPERATORS.map(o => (
+                        <option key={o.value} value={o.value}>{o.label}</option>
+                      ))}
+                    </select>
+                    <input
+                      type="text"
+                      value={f.value}
+                      placeholder={op?.placeholder || 'value'}
+                      onChange={(e) => updateFilter(idx, { value: e.target.value })}
+                      onKeyDown={(e) => { if (e.key === 'Enter') applyFilters() }}
+                      className="flex-1 min-w-[12rem] px-2 py-1.5 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                    />
+                    <button
+                      onClick={() => removeFilter(idx)}
+                      className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+                      title="Remove filter"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                )
+              })}
+              <div className="flex items-center gap-2 pt-1">
+                <button
+                  onClick={applyFilters}
+                  className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
+                >
+                  Apply
+                </button>
+                <button
+                  onClick={clearFilters}
+                  className="px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100 rounded-md transition-colors"
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Data Tab */}
       {activeTab === 'data' && (
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
@@ -633,25 +794,75 @@ curl_close($ch);`
 
           {/* Pagination */}
           {totalPages > 1 && (
-            <div className="flex items-center justify-between px-4 py-3 border-t border-gray-200">
+            <div className="flex items-center justify-between px-4 py-3 border-t border-gray-200 flex-wrap gap-3">
               <p className="text-sm text-gray-600">
-                Page {page} of {totalPages}
+                Page {page} of {totalPages} · {(rowsData?.total_rows || 0).toLocaleString()} rows
               </p>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1 flex-wrap">
                 <button
-                  onClick={() => setPage(p => Math.max(1, p - 1))}
+                  onClick={() => goToPage(1)}
                   disabled={page === 1}
-                  className="p-2 text-gray-500 hover:bg-gray-100 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="p-1.5 text-gray-500 hover:bg-gray-100 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="First page"
+                >
+                  <ChevronsLeft className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => goToPage(page - 1)}
+                  disabled={page === 1}
+                  className="p-1.5 text-gray-500 hover:bg-gray-100 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Previous page"
                 >
                   <ChevronLeft className="w-4 h-4" />
                 </button>
+                {getPageNumbers(page, totalPages).map((p, idx) =>
+                  p === 'ellipsis' ? (
+                    <span key={`e-${idx}`} className="px-2 text-gray-400 select-none">…</span>
+                  ) : (
+                    <button
+                      key={p}
+                      onClick={() => goToPage(p)}
+                      className={`min-w-[2rem] px-2 py-1 text-sm rounded transition-colors ${
+                        p === page
+                          ? 'bg-blue-600 text-white'
+                          : 'text-gray-700 hover:bg-gray-100'
+                      }`}
+                    >
+                      {p}
+                    </button>
+                  )
+                )}
                 <button
-                  onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                  onClick={() => goToPage(page + 1)}
                   disabled={page === totalPages}
-                  className="p-2 text-gray-500 hover:bg-gray-100 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="p-1.5 text-gray-500 hover:bg-gray-100 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Next page"
                 >
                   <ChevronRight className="w-4 h-4" />
                 </button>
+                <button
+                  onClick={() => goToPage(totalPages)}
+                  disabled={page === totalPages}
+                  className="p-1.5 text-gray-500 hover:bg-gray-100 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Last page"
+                >
+                  <ChevronsRight className="w-4 h-4" />
+                </button>
+                <div className="flex items-center gap-1 ml-2 pl-3 border-l border-gray-200">
+                  <span className="text-xs text-gray-500">Go to</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={totalPages}
+                    value={pageInput}
+                    placeholder={String(page)}
+                    onChange={(e) => setPageInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') goToPage(parseInt(pageInput, 10))
+                    }}
+                    className="w-16 px-2 py-1 border border-gray-300 rounded text-sm text-center focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                  />
+                </div>
               </div>
             </div>
           )}

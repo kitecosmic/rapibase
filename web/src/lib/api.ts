@@ -88,13 +88,27 @@ export const tables = {
   drop: (name: string) =>
     request<any>(`/tables/${name}`, { method: 'DELETE' }),
 
-  getRows: (name: string, page = 1, pageSize = 50, orderBy?: string, order?: string) => {
+  getRows: (
+    name: string,
+    page = 1,
+    pageSize = 50,
+    orderBy?: string,
+    order?: string,
+    filters?: { column: string; operator: string; value: string }[]
+  ) => {
     const params = new URLSearchParams({
       page: String(page),
       page_size: String(pageSize),
     })
     if (orderBy) params.set('order_by', orderBy)
     if (order) params.set('order', order)
+    if (filters) {
+      for (const f of filters) {
+        if (!f.column || !f.operator) continue
+        if (f.operator !== 'is' && f.value === '') continue
+        params.append(`${f.column}.${f.operator}`, f.value)
+      }
+    }
     return request<any>(`/tables/${name}/rows?${params}`)
   },
 
