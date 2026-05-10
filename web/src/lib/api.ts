@@ -9,29 +9,85 @@ class ApiError extends Error {
   }
 }
 
+let refreshPromise: Promise<string | null> | null = null
+
+async function refreshAccessToken(): Promise<string | null> {
+  if (refreshPromise) return refreshPromise
+
+  refreshPromise = (async () => {
+    const { refreshToken, user, setAuth, logout } = useAuthStore.getState()
+    if (!refreshToken) return null
+
+    try {
+      const res = await fetch(`${API_BASE}/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: refreshToken }),
+      })
+      if (!res.ok) {
+        logout()
+        return null
+      }
+      const data = await res.json()
+      setAuth(data.token, data.refresh_token, data.user ?? user)
+      return data.token as string
+    } catch {
+      return null
+    }
+  })()
+
+  try {
+    return await refreshPromise
+  } finally {
+    refreshPromise = null
+  }
+}
+
+export async function authedFetch(
+  endpoint: string,
+  options: RequestInit = {}
+): Promise<Response> {
+  const buildHeaders = (token: string | null): HeadersInit => {
+    const h: Record<string, string> = { ...(options.headers as Record<string, string> | undefined) }
+    if (token) h['Authorization'] = `Bearer ${token}`
+    return h
+  }
+
+  const { token } = useAuthStore.getState()
+  let response = await fetch(`${API_BASE}${endpoint}`, {
+    ...options,
+    headers: buildHeaders(token),
+  })
+
+  if (response.status !== 401) return response
+
+  const newToken = await refreshAccessToken()
+  if (!newToken) {
+    if (window.location.pathname !== '/login') {
+      window.location.href = '/login'
+    }
+    return response
+  }
+
+  response = await fetch(`${API_BASE}${endpoint}`, {
+    ...options,
+    headers: buildHeaders(newToken),
+  })
+  return response
+}
+
 async function request<T>(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<T> {
-  const { token, logout } = useAuthStore.getState()
-
   const headers: HeadersInit = {
     'Content-Type': 'application/json',
     ...options.headers,
   }
 
-  if (token) {
-    (headers as Record<string, string>)['Authorization'] = `Bearer ${token}`
-  }
-
-  const response = await fetch(`${API_BASE}${endpoint}`, {
-    ...options,
-    headers,
-  })
+  const response = await authedFetch(endpoint, { ...options, headers })
 
   if (response.status === 401) {
-    logout()
-    window.location.href = '/login'
     throw new ApiError(401, 'Unauthorized')
   }
 
@@ -140,15 +196,11 @@ export const query = {
 // Import/Export
 export const importExport = {
   importSQL: async (file: File) => {
-    const { token } = useAuthStore.getState()
     const formData = new FormData()
     formData.append('file', file)
 
-    const response = await fetch(`${API_BASE}/import/sql`, {
+    const response = await authedFetch(`/import/sql`, {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
       body: formData,
     })
 
@@ -158,15 +210,11 @@ export const importExport = {
   },
 
   importJSON: async (table: string, file: File, autoCreate: boolean = true) => {
-    const { token } = useAuthStore.getState()
     const formData = new FormData()
     formData.append('file', file)
 
-    const response = await fetch(`${API_BASE}/import/json/${table}?auto_create=${autoCreate}`, {
+    const response = await authedFetch(`/import/json/${table}?auto_create=${autoCreate}`, {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
       body: formData,
     })
 
@@ -176,15 +224,11 @@ export const importExport = {
   },
 
   importCSV: async (table: string, file: File, autoCreate: boolean = true) => {
-    const { token } = useAuthStore.getState()
     const formData = new FormData()
     formData.append('file', file)
 
-    const response = await fetch(`${API_BASE}/import/csv/${table}?auto_create=${autoCreate}`, {
+    const response = await authedFetch(`/import/csv/${table}?auto_create=${autoCreate}`, {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
       body: formData,
     })
 
@@ -193,14 +237,8 @@ export const importExport = {
     return data
   },
 
-  exportTable: (table: string, format: 'json' | 'sql' = 'json') => {
-    const { token } = useAuthStore.getState()
-    return fetch(`${API_BASE}/export/${table}?format=${format}`, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    }).then((res) => res.blob())
-  },
+  exportTable: (table: string, format: 'json' | 'sql' = 'json') =>
+    authedFetch(`/export/${table}?format=${format}`).then((res) => res.blob()),
 }
 
 // Webhooks
@@ -336,16 +374,12 @@ export const storage = {
   },
 
   uploadObject: async (bucket: string, file: File, prefix: string = '') => {
-    const { token } = useAuthStore.getState()
     const formData = new FormData()
     formData.append('file', file)
     if (prefix) formData.append('prefix', prefix)
 
-    const response = await fetch(`${API_BASE}/storage/buckets/${bucket}/objects`, {
+    const response = await authedFetch(`/storage/buckets/${bucket}/objects`, {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
       body: formData,
     })
 
