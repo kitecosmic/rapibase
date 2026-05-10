@@ -634,10 +634,12 @@ curl_close($ch);`
                       <select
                         value={f.operator}
                         onChange={(e) => updateFilter(idx, { operator: e.target.value })}
-                        className="px-2 py-1.5 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none min-w-[14rem]"
+                        className="px-2 py-1.5 border border-gray-300 rounded-md text-sm font-mono focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none min-w-[20rem]"
                       >
                         {FILTER_OPERATORS.map(o => (
-                          <option key={o.value} value={o.value}>{o.label} — {o.description}</option>
+                          <option key={o.value} value={o.value}>
+                            {o.label.padEnd(7, ' ')}{o.description}
+                          </option>
                         ))}
                       </select>
                       <input
