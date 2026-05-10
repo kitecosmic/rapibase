@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/rapibase/rapibase/internal/models"
 )
 
@@ -407,12 +408,31 @@ func pgxRowsToMaps(rows pgx.Rows) ([]map[string]interface{}, error) {
 			return nil, err
 		}
 
-		row := make(map[string]interface{})
+		row := make(map[string]interface{}, len(fieldDescriptions))
 		for i, fd := range fieldDescriptions {
-			row[string(fd.Name)] = values[i]
+			row[string(fd.Name)] = normalizeValue(fd.DataTypeOID, values[i])
 		}
 		result = append(result, row)
 	}
 
 	return result, rows.Err()
+}
+
+// normalizeValue converts pgx default decodings into JSON-friendly forms.
+// Without this, uuid columns surface as [16]byte and JSON-encode as a numeric array.
+func normalizeValue(oid uint32, v interface{}) interface{} {
+	if v == nil {
+		return nil
+	}
+	switch oid {
+	case pgtype.UUIDOID:
+		if b, ok := v.([16]byte); ok {
+			return formatUUID(b)
+		}
+	}
+	return v
+}
+
+func formatUUID(b [16]byte) string {
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
