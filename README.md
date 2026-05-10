@@ -13,6 +13,7 @@
 - ✅ **Data Import/Export** - Import from SQL or JSON, export to both formats
 - ✅ **REST API** - Auto-generated CRUD endpoints for all your tables
 - ✅ **File Storage** - S3-compatible storage with MinIO (buckets, upload, download, image preview)
+- ✅ **MCP for AI Agents** - Built-in [Model Context Protocol](https://modelcontextprotocol.io) endpoint at `/mcp` so Claude (and other agents) can discover tables, run CRUD, raw SQL, DDL and storage ops with one URL + one API key
 - ✅ **Docker Ready** - Single command deployment with docker-compose
 
 ### Authentication
@@ -328,6 +329,87 @@ GET    /api/v1/storage/:bucket/metadata/*  - Get file metadata
 PATCH  /api/v1/storage/:bucket/metadata/*  - Update file metadata
 GET    /api/v1/storage/owner/:user_id      - Get files by owner
 ```
+
+## MCP — Talk to RapiBase from Claude and other agents
+
+RapiBase ships a built-in **Model Context Protocol** server at `POST /mcp` (streamable-HTTP transport). The endpoint lives inside the same Go binary, so there's nothing extra to deploy: `docker compose up` and the MCP is online with the same `.env` and the same `SERVICE_KEY` you already have.
+
+### What the agent gets
+
+| Tool | Description |
+|---|---|
+| `list_tables` | Every user table with columns, types, primary key and row count. |
+| `describe_table` | Full schema of a single table. |
+| `query_rows` | Paginated SELECT with `eq, neq, gt, gte, lt, lte, like, ilike, is, in` filters. |
+| `insert_row` / `update_row` / `delete_row` | CRUD on any table. Fires the same webhooks as the REST API. |
+| `execute_sql` | Parameterised raw SQL. Internal `_rapibase_*` tables are blocked. |
+| `create_table` / `drop_table` | Schema changes when the user explicitly authorises them. |
+| `list_buckets` / `list_objects` / `download_object` / `upload_object` / `delete_object` | S3-compatible storage. Files exchanged as base64. |
+
+| Resource | Description |
+|---|---|
+| `rapibase://tables` | Live list of tables (read for free, no tool budget). |
+| `rapibase://tables/{name}` | Schema for a single table. |
+
+### Connect from Claude Desktop
+
+Edit `claude_desktop_config.json` (`%APPDATA%\Claude\` on Windows, `~/Library/Application Support/Claude/` on macOS):
+
+```json
+{
+  "mcpServers": {
+    "rapibase": {
+      "type": "http",
+      "url": "http://localhost:8080/mcp",
+      "headers": {
+        "apikey": "YOUR_SERVICE_KEY"
+      }
+    }
+  }
+}
+```
+
+Replace the URL with your public domain in production (`https://yourdomain.com/mcp`). Restart Claude Desktop and the `rapibase` server will appear with all tools and resources visible.
+
+### Connect from the Anthropic SDK
+
+```python
+from anthropic import Anthropic
+
+client = Anthropic()
+response = client.messages.create(
+    model="claude-opus-4-7",
+    max_tokens=2048,
+    mcp_servers=[{
+        "type": "url",
+        "url": "https://yourdomain.com/mcp",
+        "name": "rapibase",
+        "authorization_token": "YOUR_SERVICE_KEY",
+    }],
+    messages=[
+        {"role": "user", "content": "List the tables and tell me which has the most rows."}
+    ],
+)
+```
+
+### Quick test with curl
+
+```bash
+curl -s -X POST http://localhost:8080/mcp \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -H "apikey: $SERVICE_KEY" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | jq '.result.tools[].name'
+```
+
+You should see all 14 tool names listed.
+
+### Security
+
+- The endpoint requires the **SERVICE_KEY** (`apikey` header). Anon Key + JWT is **not** accepted on `/mcp` — agents get full access or none.
+- Internal RapiBase tables (`_rapibase_*`) are blocked even from raw SQL.
+- For production, expose `/mcp` only over HTTPS (Caddy handles it automatically as documented above).
+- Webhooks fire on MCP-driven inserts/updates/deletes, identical to REST API behaviour.
 
 ## Authentication Flows
 

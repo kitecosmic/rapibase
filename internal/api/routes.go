@@ -5,11 +5,13 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/adaptor"
 	"github.com/rapibase/rapibase/internal/api/handlers"
 	"github.com/rapibase/rapibase/internal/api/middleware"
 	"github.com/rapibase/rapibase/internal/auth"
 	"github.com/rapibase/rapibase/internal/config"
 	"github.com/rapibase/rapibase/internal/database"
+	mcpserver "github.com/rapibase/rapibase/internal/mcp"
 	"github.com/rapibase/rapibase/internal/storage"
 )
 
@@ -190,10 +192,15 @@ func SetupRoutes(app *fiber.App, db *database.DB, cfg *config.Config) *WebhookDi
 	// ============================================
 	// STORAGE (MinIO) - Admin routes
 	// ============================================
+	// Hoisted out of the if-block so the MCP handler below can share the
+	// same client when storage is enabled, instead of dialing MinIO twice.
+	var storageClient *storage.Client
 	if cfg.IsStorageEnabled() {
-		storageClient, err := storage.NewClient(cfg)
+		var err error
+		storageClient, err = storage.NewClient(cfg)
 		if err != nil {
 			log.Printf("Warning: Failed to initialize storage client: %v", err)
+			storageClient = nil
 		} else {
 			storageHandler := handlers.NewStorageHandler(storageClient, db, cfg)
 
@@ -229,6 +236,16 @@ func SetupRoutes(app *fiber.App, db *database.DB, cfg *config.Config) *WebhookDi
 			log.Println("Storage (MinIO) initialized successfully")
 		}
 	}
+
+	// ============================================
+	// MCP - Model Context Protocol endpoint for AI agents
+	// Streamable-HTTP transport behind RequireServiceKey, so the agent
+	// connects with one URL + the SERVICE_KEY header. Tools talk to the
+	// database/storage layers directly — no internal REST hop.
+	// ============================================
+	mcpHandler := mcpserver.NewHandler(db, storageClient, webhookDispatcher)
+	app.All("/mcp", apiKeyMiddleware.RequireServiceKey(), adaptor.HTTPHandler(mcpHandler))
+	log.Println("MCP endpoint mounted at /mcp")
 
 	return webhookDispatcher
 }
