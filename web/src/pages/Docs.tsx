@@ -1,11 +1,12 @@
 import { useState } from 'react'
-import { 
-  Book, 
-  Copy, 
-  Check, 
-  Key, 
-  Users, 
-  Database, 
+import {
+  Book,
+  Bot,
+  Copy,
+  Check,
+  Key,
+  Users,
+  Database,
   Mail,
   Shield,
   Zap,
@@ -15,7 +16,7 @@ import {
   HardDrive
 } from 'lucide-react'
 
-type DocSection = 'overview' | 'quickstart' | 'auth-flow' | 'api-keys' | 'rest-api' | 'storage-api' | 'email-flows' | 'examples'
+type DocSection = 'overview' | 'quickstart' | 'auth-flow' | 'api-keys' | 'rest-api' | 'storage-api' | 'email-flows' | 'mcp' | 'examples'
 
 export default function Docs() {
   const [copiedSection, setCopiedSection] = useState<string | null>(null)
@@ -35,6 +36,7 @@ export default function Docs() {
     { id: 'email-flows', title: 'Email Flows', icon: <Mail className="w-4 h-4" /> },
     { id: 'rest-api', title: 'REST API', icon: <Database className="w-4 h-4" /> },
     { id: 'storage-api', title: 'Storage API', icon: <HardDrive className="w-4 h-4" /> },
+    { id: 'mcp', title: 'MCP for AI Agents', icon: <Bot className="w-4 h-4" /> },
     { id: 'examples', title: 'Full Examples', icon: <Code className="w-4 h-4" /> },
   ]
 
@@ -539,6 +541,85 @@ SMTP_FROM_NAME=Your App
 # Redirect URL for email callbacks
 AUTH_REDIRECT_URL=https://yourapp.com
 \`\`\`
+
+## MCP for AI Agents
+
+RapiBase ships a built-in **Model Context Protocol** server at \`POST /mcp\` (Streamable HTTP, MCP spec 2025-03-26+). Agents can discover tables and run CRUD/SQL/storage with one URL and the SERVICE_KEY.
+
+### Authentication
+
+Send the SERVICE_KEY in **either** header (both work):
+
+| Header | Example |
+|---|---|
+| Authorization: Bearer | \`Authorization: Bearer YOUR_SERVICE_KEY\` |
+| apikey | \`apikey: YOUR_SERVICE_KEY\` |
+
+ANON_KEY + JWT is **not** accepted on \`/mcp\`. Agents get full access (SERVICE_KEY) or none.
+
+### Tools exposed
+
+| Tool | Description |
+|---|---|
+| list_tables | Tables with columns, types, primary key, row count |
+| describe_table | Full schema of a single table |
+| query_rows | Paginated SELECT with eq/neq/gt/gte/lt/lte/like/ilike/is/in filters |
+| insert_row, update_row, delete_row | CRUD on any table (fires webhooks) |
+| execute_sql | Parameterised raw SQL ($1, $2, ...) |
+| create_table, drop_table | Schema changes |
+| list_buckets, list_objects, download_object, upload_object, delete_object | S3-compatible storage |
+
+Resources: \`rapibase://tables\` (live list), \`rapibase://tables/{name}\` (single schema).
+
+### Connect from Claude Desktop
+
+\`\`\`json
+{
+  "mcpServers": {
+    "rapibase": {
+      "type": "http",
+      "url": "https://yourdomain.com/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_SERVICE_KEY"
+      }
+    }
+  }
+}
+\`\`\`
+
+### Connect from the Anthropic SDK
+
+\`\`\`python
+from anthropic import Anthropic
+client = Anthropic()
+response = client.messages.create(
+    model="claude-opus-4-7",
+    max_tokens=2048,
+    mcp_servers=[{
+        "type": "url",
+        "url": "https://yourdomain.com/mcp",
+        "name": "rapibase",
+        "authorization_token": "YOUR_SERVICE_KEY",
+    }],
+    messages=[{"role": "user", "content": "List my tables"}],
+)
+\`\`\`
+
+### Connect from other platforms (n8n, OpenAI, Cursor, Cline, ...)
+
+1. Server URL: \`https://yourdomain.com/mcp\`
+2. Bearer token / secret: your \`SERVICE_KEY\`
+3. Transport: **Streamable HTTP** (NOT SSE legacy — \`/sse\` + \`/messages\` is not supported).
+
+### Quick test with curl
+
+\`\`\`bash
+curl -s -X POST https://yourdomain.com/mcp \\
+  -H 'Content-Type: application/json' \\
+  -H 'Accept: application/json, text/event-stream' \\
+  -H "Authorization: Bearer $SERVICE_KEY" \\
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+\`\`\`
 `
 
   const renderContent = () => {
@@ -553,7 +634,7 @@ AUTH_REDIRECT_URL=https://yourapp.com
               </p>
             </div>
             
-            <div className="grid md:grid-cols-3 gap-4">
+            <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
               <div className="bg-blue-50 rounded-lg p-4 border border-blue-200">
                 <Users className="w-8 h-8 text-blue-600 mb-2" />
                 <h3 className="font-semibold text-gray-900">Authentication</h3>
@@ -563,6 +644,11 @@ AUTH_REDIRECT_URL=https://yourapp.com
                 <Database className="w-8 h-8 text-green-600 mb-2" />
                 <h3 className="font-semibold text-gray-900">REST API</h3>
                 <p className="text-sm text-gray-600">CRUD operations on your database tables</p>
+              </div>
+              <div className="bg-orange-50 rounded-lg p-4 border border-orange-200">
+                <Bot className="w-8 h-8 text-orange-600 mb-2" />
+                <h3 className="font-semibold text-gray-900">MCP for Agents</h3>
+                <p className="text-sm text-gray-600">Built-in endpoint so Claude and other agents can use your tables</p>
               </div>
               <div className="bg-purple-50 rounded-lg p-4 border border-purple-200">
                 <Shield className="w-8 h-8 text-purple-600 mb-2" />
@@ -1051,6 +1137,166 @@ console.log('Files:', files.objects);`} />
               <p className="text-sm text-yellow-800">
                 <strong>💡 Public vs Private Buckets:</strong> Public buckets allow direct URL access to files. 
                 Private buckets require API key authentication. You can toggle bucket visibility in the Storage dashboard.
+              </p>
+            </div>
+          </div>
+        )
+
+      case 'mcp':
+        return (
+          <div className="space-y-6">
+            <div>
+              <h2 className="text-2xl font-bold text-gray-900 mb-2 flex items-center gap-2">
+                <Bot className="w-7 h-7 text-orange-600" /> MCP for AI Agents
+              </h2>
+              <p className="text-gray-600">
+                RapiBase ships a built-in <strong>Model Context Protocol</strong> server at <code className="px-1.5 py-0.5 bg-gray-100 rounded text-sm">POST /mcp</code>. Connect Claude, ChatGPT or any MCP-compatible agent and it will be able to discover your tables, run CRUD, raw SQL and storage operations — with one URL and one API key.
+              </p>
+            </div>
+
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+              <p className="text-sm text-blue-900">
+                <strong>Transport:</strong> Streamable HTTP (MCP spec 2025-03-26+). The deprecated SSE-legacy transport (separate <code>/sse</code> + <code>/messages</code> endpoints) is <strong>not</strong> supported. If your client offers a choice, pick "Streamable HTTP" or "MCP HTTP".
+              </p>
+            </div>
+
+            <div>
+              <h3 className="text-lg font-semibold text-gray-900 mb-3">Authentication</h3>
+              <p className="text-gray-600 mb-3">
+                The endpoint requires your <strong>SERVICE_KEY</strong>. Send it in <em>either</em> header — both work:
+              </p>
+              <div className="overflow-x-auto">
+                <table className="w-full border border-gray-200 rounded-lg text-sm">
+                  <thead className="bg-gray-50">
+                    <tr className="text-left">
+                      <th className="px-4 py-2 font-semibold text-gray-700">Header</th>
+                      <th className="px-4 py-2 font-semibold text-gray-700">Example</th>
+                      <th className="px-4 py-2 font-semibold text-gray-700">When to use</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200">
+                    <tr>
+                      <td className="px-4 py-2 font-mono text-xs">Authorization: Bearer</td>
+                      <td className="px-4 py-2 font-mono text-xs">Authorization: Bearer YOUR_SERVICE_KEY</td>
+                      <td className="px-4 py-2">Default for MCP platforms (Claude Desktop, OpenAI Agents, n8n, Cursor, Cline). Most UIs ask for a "bearer token" or "secret" — paste your <code>SERVICE_KEY</code>.</td>
+                    </tr>
+                    <tr>
+                      <td className="px-4 py-2 font-mono text-xs">apikey</td>
+                      <td className="px-4 py-2 font-mono text-xs">apikey: YOUR_SERVICE_KEY</td>
+                      <td className="px-4 py-2">Same convention as the rest of the RapiBase REST API. Handy from curl or custom code.</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <p className="text-sm text-gray-500 mt-2">
+                ANON_KEY + JWT is <strong>not</strong> accepted on <code>/mcp</code> — agents get full access (SERVICE_KEY) or none.
+              </p>
+            </div>
+
+            <div>
+              <h3 className="text-lg font-semibold text-gray-900 mb-3">What the agent gets</h3>
+              <div className="overflow-x-auto">
+                <table className="w-full border border-gray-200 rounded-lg text-sm">
+                  <thead className="bg-gray-50">
+                    <tr className="text-left">
+                      <th className="px-4 py-2 font-semibold text-gray-700">Tool</th>
+                      <th className="px-4 py-2 font-semibold text-gray-700">Description</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200">
+                    <tr><td className="px-4 py-2 font-mono text-xs">list_tables</td><td className="px-4 py-2">Every user table with columns, types, primary key and row count.</td></tr>
+                    <tr><td className="px-4 py-2 font-mono text-xs">describe_table</td><td className="px-4 py-2">Full schema of a single table.</td></tr>
+                    <tr><td className="px-4 py-2 font-mono text-xs">query_rows</td><td className="px-4 py-2">Paginated SELECT with eq, neq, gt, gte, lt, lte, like, ilike, is, in filters.</td></tr>
+                    <tr><td className="px-4 py-2 font-mono text-xs">insert_row · update_row · delete_row</td><td className="px-4 py-2">CRUD on any table. Fires the same webhooks as the REST API.</td></tr>
+                    <tr><td className="px-4 py-2 font-mono text-xs">execute_sql</td><td className="px-4 py-2">Parameterised raw SQL. Internal <code>_rapibase_*</code> tables are blocked.</td></tr>
+                    <tr><td className="px-4 py-2 font-mono text-xs">create_table · drop_table</td><td className="px-4 py-2">Schema changes when the user explicitly authorises them.</td></tr>
+                    <tr><td className="px-4 py-2 font-mono text-xs">list_buckets · list_objects · download_object · upload_object · delete_object</td><td className="px-4 py-2">S3-compatible storage. Files exchanged as base64.</td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <p className="text-sm text-gray-500 mt-3">
+                Resources: <code className="font-mono">rapibase://tables</code> (live list) and <code className="font-mono">rapibase://tables/&#123;name&#125;</code> (single schema). Read for free, no tool budget.
+              </p>
+            </div>
+
+            <div>
+              <h3 className="text-lg font-semibold text-gray-900 mb-3">Connect from Claude Desktop</h3>
+              <p className="text-gray-600 mb-3">
+                Edit <code className="font-mono text-sm">claude_desktop_config.json</code> (<code>%APPDATA%\Claude\</code> on Windows, <code>~/Library/Application Support/Claude/</code> on macOS):
+              </p>
+              <CodeBlock code={`{
+  "mcpServers": {
+    "rapibase": {
+      "type": "http",
+      "url": "https://yourdomain.com/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_SERVICE_KEY"
+      }
+    }
+  }
+}`} />
+              <p className="text-sm text-gray-500 mt-2">
+                Restart Claude Desktop and the <code>rapibase</code> server appears with all 14 tools and 2 resources.
+              </p>
+            </div>
+
+            <div>
+              <h3 className="text-lg font-semibold text-gray-900 mb-3">Connect from the Anthropic SDK</h3>
+              <CodeBlock code={`from anthropic import Anthropic
+
+client = Anthropic()
+response = client.messages.create(
+    model="claude-opus-4-7",
+    max_tokens=2048,
+    mcp_servers=[{
+        "type": "url",
+        "url": "https://yourdomain.com/mcp",
+        "name": "rapibase",
+        "authorization_token": "YOUR_SERVICE_KEY",  # sent as Authorization: Bearer
+    }],
+    messages=[
+        {"role": "user", "content": "List the tables and tell me which has the most rows."}
+    ],
+)`} />
+            </div>
+
+            <div>
+              <h3 className="text-lg font-semibold text-gray-900 mb-3">Connect from other platforms</h3>
+              <p className="text-gray-600 mb-3">
+                For n8n, OpenAI Agents, Cursor, Cline and most other MCP clients, the platform asks for two things:
+              </p>
+              <ol className="list-decimal pl-6 space-y-1 text-gray-700 text-sm mb-3">
+                <li><strong>Server URL</strong> → <code className="font-mono">https://yourdomain.com/mcp</code></li>
+                <li><strong>Bearer token</strong> / <strong>Authorization</strong> / <strong>Secret</strong> → your <code className="font-mono">SERVICE_KEY</code></li>
+              </ol>
+              <p className="text-sm text-gray-600">
+                The platform will send <code className="font-mono">Authorization: Bearer &lt;your-service-key&gt;</code> and RapiBase will accept it. If asked for a transport, choose <strong>Streamable HTTP</strong>.
+              </p>
+            </div>
+
+            <div>
+              <h3 className="text-lg font-semibold text-gray-900 mb-3">Quick test with curl</h3>
+              <CodeBlock code={`# Authorization: Bearer (recommended)
+curl -s -X POST https://yourdomain.com/mcp \\
+  -H 'Content-Type: application/json' \\
+  -H 'Accept: application/json, text/event-stream' \\
+  -H "Authorization: Bearer $SERVICE_KEY" \\
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' \\
+| jq '.result.tools[].name'
+
+# Or with the apikey header
+curl -s -X POST https://yourdomain.com/mcp \\
+  -H 'Content-Type: application/json' \\
+  -H 'Accept: application/json, text/event-stream' \\
+  -H "apikey: $SERVICE_KEY" \\
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' \\
+| jq '.result.tools[].name'`} />
+              <p className="text-sm text-gray-500 mt-2">You should see all 14 tool names listed.</p>
+            </div>
+
+            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+              <p className="text-sm text-yellow-900">
+                <strong>⚠️ Security:</strong> The MCP gives the agent admin-level access to your data. Expose <code>/mcp</code> only over HTTPS and treat the <code>SERVICE_KEY</code> as a secret. Webhooks fire on agent-driven inserts/updates/deletes, identical to REST API behaviour.
               </p>
             </div>
           </div>

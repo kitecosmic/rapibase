@@ -1152,6 +1152,96 @@ GET /api/v1/rest/${name}?is_active.eq=true&order_by=price&order=asc&page=1&page_
               </div>
             </div>
           </div>
+
+          {/* MCP — use this table from an AI agent */}
+          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-200 flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900">Use from an AI agent (MCP)</h2>
+                <p className="text-sm text-gray-600 mt-1">
+                  The built-in MCP server lets Claude, ChatGPT or any MCP-compatible agent query this table. See the full reference in <a href="/docs" className="text-blue-600 hover:underline">Docs → MCP for AI Agents</a>.
+                </p>
+              </div>
+              <span className="inline-flex items-center px-2.5 py-1 rounded text-xs font-medium bg-orange-100 text-orange-700 whitespace-nowrap">/mcp</span>
+            </div>
+            <div className="p-6 space-y-4">
+              <div>
+                <h3 className="text-sm font-semibold text-gray-700 mb-2">Connect Claude Desktop</h3>
+                <div className="relative">
+                  <pre className="bg-gray-900 text-gray-100 p-4 rounded-lg text-xs overflow-x-auto">
+                    <code>{`{
+  "mcpServers": {
+    "rapibase": {
+      "type": "http",
+      "url": "${projectData?.app_url || 'https://yourdomain.com'}/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_SERVICE_KEY"
+      }
+    }
+  }
+}`}</code>
+                  </pre>
+                  <button
+                    onClick={() => copyToClipboard(`{
+  "mcpServers": {
+    "rapibase": {
+      "type": "http",
+      "url": "${projectData?.app_url || 'https://yourdomain.com'}/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_SERVICE_KEY"
+      }
+    }
+  }
+}`, 'mcp-config')}
+                    className="absolute top-2 right-2 p-2 bg-gray-800 hover:bg-gray-700 rounded text-gray-400 hover:text-white transition-colors"
+                  >
+                    {copiedCode === 'mcp-config' ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                  </button>
+                </div>
+                <p className="text-xs text-gray-500 mt-1">
+                  Replace <code className="font-mono">YOUR_SERVICE_KEY</code> with your service key. <code className="font-mono">apikey: YOUR_SERVICE_KEY</code> works as an alternative header.
+                </p>
+              </div>
+
+              <div>
+                <h3 className="text-sm font-semibold text-gray-700 mb-2">Sample prompts for the agent</h3>
+                <ul className="text-sm text-gray-700 space-y-1 list-disc pl-5">
+                  <li>"Show me the schema and first 10 rows of <code className="font-mono">{name}</code>."</li>
+                  <li>"Find rows in <code className="font-mono">{name}</code> where <em>(your filter)</em>, ordered by <em>(column)</em>."</li>
+                  <li>"Insert a new row into <code className="font-mono">{name}</code> with these values: ..."</li>
+                </ul>
+                <p className="text-xs text-gray-500 mt-2">
+                  Behind the scenes the agent calls <code className="font-mono">describe_table</code>, <code className="font-mono">query_rows</code>, <code className="font-mono">insert_row</code> etc., always passing <code className="font-mono">"table": "{name}"</code>.
+                </p>
+              </div>
+
+              <div>
+                <h3 className="text-sm font-semibold text-gray-700 mb-2">Test from curl</h3>
+                <div className="relative">
+                  <pre className="bg-gray-900 text-gray-100 p-4 rounded-lg text-xs overflow-x-auto">
+                    <code>{`curl -s -X POST ${projectData?.app_url || 'https://yourdomain.com'}/mcp \\
+  -H 'Content-Type: application/json' \\
+  -H 'Accept: application/json, text/event-stream' \\
+  -H "Authorization: Bearer $SERVICE_KEY" \\
+  -d '{
+    "jsonrpc":"2.0","id":1,"method":"tools/call",
+    "params":{"name":"query_rows","arguments":{"table":"${name}","page_size":5}}
+  }'`}</code>
+                  </pre>
+                  <button
+                    onClick={() => copyToClipboard(`curl -s -X POST ${projectData?.app_url || 'https://yourdomain.com'}/mcp \\
+  -H 'Content-Type: application/json' \\
+  -H 'Accept: application/json, text/event-stream' \\
+  -H "Authorization: Bearer $SERVICE_KEY" \\
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"query_rows","arguments":{"table":"${name}","page_size":5}}}'`, 'mcp-curl')}
+                    className="absolute top-2 right-2 p-2 bg-gray-800 hover:bg-gray-700 rounded text-gray-400 hover:text-white transition-colors"
+                  >
+                    {copiedCode === 'mcp-curl' ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>

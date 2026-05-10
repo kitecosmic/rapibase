@@ -351,6 +351,19 @@ RapiBase ships a built-in **Model Context Protocol** server at `POST /mcp` (stre
 | `rapibase://tables` | Live list of tables (read for free, no tool budget). |
 | `rapibase://tables/{name}` | Schema for a single table. |
 
+### Authentication
+
+The `/mcp` endpoint requires your **`SERVICE_KEY`**. You can send it in either of two equivalent ways — pick the one your client supports:
+
+| Header | Example | When to use |
+|---|---|---|
+| `apikey` | `apikey: YOUR_SERVICE_KEY` | Same convention as the rest of the RapiBase REST API. Useful from curl, custom code, or clients that let you set an arbitrary header. |
+| `Authorization: Bearer` | `Authorization: Bearer YOUR_SERVICE_KEY` | The de-facto standard for MCP platforms (Claude Desktop, OpenAI Agents SDK, n8n, Cursor, Cline, …). Most UIs ask for a "bearer token" or "secret" — paste your `SERVICE_KEY` there. |
+
+If your client gives you a single "token" / "secret" / "bearer" field, paste the `SERVICE_KEY` into it — RapiBase will read it from the `Authorization` header automatically. The legacy `apikey` header is kept for backwards compatibility and curl ergonomics.
+
+> Anon Key + JWT is **not** accepted on `/mcp`. Agents get full access (SERVICE_KEY) or none.
+
 ### Connect from Claude Desktop
 
 Edit `claude_desktop_config.json` (`%APPDATA%\Claude\` on Windows, `~/Library/Application Support/Claude/` on macOS):
@@ -360,16 +373,16 @@ Edit `claude_desktop_config.json` (`%APPDATA%\Claude\` on Windows, `~/Library/Ap
   "mcpServers": {
     "rapibase": {
       "type": "http",
-      "url": "http://localhost:8080/mcp",
+      "url": "https://yourdomain.com/mcp",
       "headers": {
-        "apikey": "YOUR_SERVICE_KEY"
+        "Authorization": "Bearer YOUR_SERVICE_KEY"
       }
     }
   }
 }
 ```
 
-Replace the URL with your public domain in production (`https://yourdomain.com/mcp`). Restart Claude Desktop and the `rapibase` server will appear with all tools and resources visible.
+`apikey: YOUR_SERVICE_KEY` works too if you prefer. Restart Claude Desktop and the `rapibase` server will appear with all tools and resources visible.
 
 ### Connect from the Anthropic SDK
 
@@ -384,7 +397,7 @@ response = client.messages.create(
         "type": "url",
         "url": "https://yourdomain.com/mcp",
         "name": "rapibase",
-        "authorization_token": "YOUR_SERVICE_KEY",
+        "authorization_token": "YOUR_SERVICE_KEY",  # sent as Authorization: Bearer …
     }],
     messages=[
         {"role": "user", "content": "List the tables and tell me which has the most rows."}
@@ -392,10 +405,29 @@ response = client.messages.create(
 )
 ```
 
+### Connect from other MCP platforms (n8n, OpenAI, Cursor, Cline, …)
+
+Most platforms ask for two things:
+
+1. **Server URL** → `https://yourdomain.com/mcp`
+2. **Bearer token** / **Authorization** / **Secret** → your `SERVICE_KEY`
+
+The platform will send `Authorization: Bearer <your-service-key>` and RapiBase will accept it. If the platform asks for a transport, choose **Streamable HTTP** (also called *HTTP* or *MCP HTTP* in some UIs). RapiBase does **not** support the deprecated SSE-legacy transport (the one with separate `/sse` + `/messages` endpoints).
+
 ### Quick test with curl
 
+Either header works — pick one:
+
 ```bash
-curl -s -X POST http://localhost:8080/mcp \
+# Option A — Authorization: Bearer (recommended for production)
+curl -s -X POST https://yourdomain.com/mcp \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -H "Authorization: Bearer $SERVICE_KEY" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | jq '.result.tools[].name'
+
+# Option B — apikey header (same as the rest of the REST API)
+curl -s -X POST https://yourdomain.com/mcp \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json, text/event-stream' \
   -H "apikey: $SERVICE_KEY" \
@@ -406,7 +438,7 @@ You should see all 14 tool names listed.
 
 ### Security
 
-- The endpoint requires the **SERVICE_KEY** (`apikey` header). Anon Key + JWT is **not** accepted on `/mcp` — agents get full access or none.
+- The endpoint requires the **SERVICE_KEY** via `Authorization: Bearer …` or `apikey` header. Anon Key + JWT is **not** accepted on `/mcp` — agents get full access or none.
 - Internal RapiBase tables (`_rapibase_*`) are blocked even from raw SQL.
 - For production, expose `/mcp` only over HTTPS (Caddy handles it automatically as documented above).
 - Webhooks fire on MCP-driven inserts/updates/deletes, identical to REST API behaviour.
