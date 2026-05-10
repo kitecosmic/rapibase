@@ -26,17 +26,17 @@ type TabType = 'data' | 'api'
 
 type RowFilter = { column: string; operator: string; value: string }
 
-const FILTER_OPERATORS: { value: string; label: string; placeholder?: string }[] = [
-  { value: 'eq', label: '=' },
-  { value: 'neq', label: '!=' },
-  { value: 'gt', label: '>' },
-  { value: 'gte', label: '>=' },
-  { value: 'lt', label: '<' },
-  { value: 'lte', label: '<=' },
-  { value: 'like', label: 'like', placeholder: '%text%' },
-  { value: 'ilike', label: 'ilike', placeholder: '%text%' },
-  { value: 'is', label: 'is', placeholder: 'null | true | false' },
-  { value: 'in', label: 'in', placeholder: 'a,b,c' },
+const FILTER_OPERATORS: { value: string; label: string; description: string; placeholder?: string }[] = [
+  { value: 'eq', label: '=', description: 'equals' },
+  { value: 'neq', label: '!=', description: 'not equals' },
+  { value: 'gt', label: '>', description: 'greater than' },
+  { value: 'gte', label: '>=', description: 'greater or equal' },
+  { value: 'lt', label: '<', description: 'less than' },
+  { value: 'lte', label: '<=', description: 'less or equal' },
+  { value: 'like', label: 'like', description: 'contains, case-sensitive', placeholder: '%text%' },
+  { value: 'ilike', label: 'ilike', description: 'contains, case-insensitive', placeholder: '%text%' },
+  { value: 'is', label: 'is', description: 'null / true / false', placeholder: 'null | true | false' },
+  { value: 'in', label: 'in', description: 'in list', placeholder: 'a,b,c' },
 ]
 
 function getPageNumbers(current: number, total: number): (number | 'ellipsis')[] {
@@ -619,41 +619,57 @@ curl_close($ch);`
               {draftFilters.map((f, idx) => {
                 const op = FILTER_OPERATORS.find(o => o.value === f.operator)
                 return (
-                  <div key={idx} className="flex items-center gap-2 flex-wrap">
-                    <select
-                      value={f.column}
-                      onChange={(e) => updateFilter(idx, { column: e.target.value })}
-                      className="px-2 py-1.5 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none min-w-[10rem]"
-                    >
-                      <option value="">column…</option>
-                      {columns.map((c: any) => (
-                        <option key={c.name} value={c.name}>{c.name}</option>
-                      ))}
-                    </select>
-                    <select
-                      value={f.operator}
-                      onChange={(e) => updateFilter(idx, { operator: e.target.value })}
-                      className="px-2 py-1.5 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none w-24"
-                    >
-                      {FILTER_OPERATORS.map(o => (
-                        <option key={o.value} value={o.value}>{o.label}</option>
-                      ))}
-                    </select>
-                    <input
-                      type="text"
-                      value={f.value}
-                      placeholder={op?.placeholder || 'value'}
-                      onChange={(e) => updateFilter(idx, { value: e.target.value })}
-                      onKeyDown={(e) => { if (e.key === 'Enter') applyFilters() }}
-                      className="flex-1 min-w-[12rem] px-2 py-1.5 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
-                    />
-                    <button
-                      onClick={() => removeFilter(idx)}
-                      className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
-                      title="Remove filter"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
+                  <div key={idx}>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <select
+                        value={f.column}
+                        onChange={(e) => updateFilter(idx, { column: e.target.value })}
+                        className="px-2 py-1.5 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none min-w-[10rem]"
+                      >
+                        <option value="">column…</option>
+                        {columns.map((c: any) => (
+                          <option key={c.name} value={c.name}>{c.name}</option>
+                        ))}
+                      </select>
+                      <select
+                        value={f.operator}
+                        onChange={(e) => updateFilter(idx, { operator: e.target.value })}
+                        className="px-2 py-1.5 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none min-w-[14rem]"
+                      >
+                        {FILTER_OPERATORS.map(o => (
+                          <option key={o.value} value={o.value}>{o.label} — {o.description}</option>
+                        ))}
+                      </select>
+                      <input
+                        type="text"
+                        value={f.value}
+                        placeholder={op?.placeholder || 'value'}
+                        onChange={(e) => updateFilter(idx, { value: e.target.value })}
+                        onKeyDown={(e) => { if (e.key === 'Enter') applyFilters() }}
+                        className="flex-1 min-w-[12rem] px-2 py-1.5 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                      />
+                      <button
+                        onClick={() => removeFilter(idx)}
+                        className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+                        title="Remove filter"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                    {op && (
+                      <p className="text-[11px] text-gray-500 mt-1 ml-1">
+                        {op.value === 'eq' && 'Exact match. Case-sensitive.'}
+                        {op.value === 'neq' && 'Excludes rows where the column equals this value.'}
+                        {op.value === 'gt' && 'Numeric or date comparison.'}
+                        {op.value === 'gte' && 'Numeric or date comparison, inclusive.'}
+                        {op.value === 'lt' && 'Numeric or date comparison.'}
+                        {op.value === 'lte' && 'Numeric or date comparison, inclusive.'}
+                        {op.value === 'like' && 'Case-sensitive text search. Use % as wildcard, e.g. %juan%.'}
+                        {op.value === 'ilike' && 'Case-insensitive text search. Use % as wildcard, e.g. %juan% matches "Juan", "JUAN", "juancho".'}
+                        {op.value === 'is' && 'Special checks: type "null", "true" or "false".'}
+                        {op.value === 'in' && 'Matches any value from a comma-separated list, e.g. active,pending.'}
+                      </p>
+                    )}
                   </div>
                 )
               })}
