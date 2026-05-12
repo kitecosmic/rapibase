@@ -40,3 +40,6 @@ web/node_modules/
 
 # Logs
 *.log
+
+.claude/
+docker-compose.test.yaml

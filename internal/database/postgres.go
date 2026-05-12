@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -250,7 +251,47 @@ func (db *DB) Migrate() error {
 		}
 	}
 
+	// Realtime requires the connecting role to have the REPLICATION
+	// attribute so it can open a logical replication slot. Superusers
+	// (the default in the docker-compose) already have it; non-super
+	// users do not, and operators rarely think to grant it.
+	//
+	// We attempt to self-grant here. The operation is intentionally
+	// non-fatal: if the role lacks privileges to grant itself
+	// REPLICATION (typical when the connecting role is not a
+	// superuser and was not created with CREATEROLE), we log a clear
+	// warning and continue — the rest of rapibase keeps working, and
+	// realtime postgres_changes will fail gracefully at Bootstrap
+	// time with an actionable error.
+	db.ensureReplicationRole(ctx)
+
 	return nil
+}
+
+// ensureReplicationRole grants the REPLICATION attribute to the
+// current role if it does not already have it. Idempotent and
+// non-fatal — any failure is logged and ignored.
+func (db *DB) ensureReplicationRole(ctx context.Context) {
+	var hasReplication bool
+	err := db.Pool.QueryRow(ctx,
+		`SELECT rolreplication FROM pg_roles WHERE rolname = current_user`,
+	).Scan(&hasReplication)
+	if err != nil {
+		log.Printf("⚠️  Could not check role REPLICATION attribute: %v", err)
+		return
+	}
+	if hasReplication {
+		return
+	}
+	if _, err := db.Pool.Exec(ctx,
+		`DO $$ BEGIN EXECUTE format('ALTER ROLE %I REPLICATION', current_user); END $$`,
+	); err != nil {
+		log.Printf("⚠️  Could not grant REPLICATION to current role: %v", err)
+		log.Printf("    Realtime postgres_changes will fail until a superuser runs:")
+		log.Printf("    ALTER ROLE <your_rapibase_user> REPLICATION;")
+		return
+	}
+	log.Printf("✅ Granted REPLICATION attribute to current role")
 }
 
 func (db *DB) CreateAdminIfNotExists(email, password string) error {

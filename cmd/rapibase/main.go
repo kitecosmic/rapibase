@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"log"
 	"os"
 	"os/signal"
@@ -61,6 +63,18 @@ func main() {
 	// Setup routes
 	_ = api.SetupRoutes(app, db, cfg)
 
+	// Realtime subsystem (WebSocket: postgres_changes + broadcast +
+	// presence + rpc). Optional: gated by REALTIME_ENABLED and by the
+	// Postgres bootstrap succeeding. Failure to start realtime never
+	// blocks the rest of the API.
+	rtCtx, rtCancel := context.WithCancel(context.Background())
+	defer rtCancel()
+	if cfg.RealtimeEnabled {
+		startRealtime(rtCtx, app, cfg)
+	} else {
+		log.Println("Realtime: disabled by REALTIME_ENABLED=false")
+	}
+
 	// Serve static files (React SPA)
 	app.Static("/", "./web/dist")
 	app.Get("/*", func(c *fiber.Ctx) error {
@@ -68,13 +82,14 @@ func main() {
 	})
 
 	// Graceful shutdown
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	shutdown := make(chan os.Signal, 1)
+	signal.Notify(shutdown, os.Interrupt, syscall.SIGTERM)
 
 	go func() {
-		<-c
+		<-shutdown
 		log.Println("Gracefully shutting down...")
-		app.Shutdown()
+		rtCancel() // signal realtime to stop first
+		_ = app.Shutdown()
 	}()
 
 	// Start server
@@ -90,4 +105,35 @@ func main() {
 	if err := app.Listen(":" + port); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}
+}
+
+// startRealtime builds the realtime.Service, runs Bootstrap against
+// Postgres, then launches Service.Run on its own goroutine. Any
+// failure (bad WAL config, missing slot creation rights, etc.) is
+// logged loudly but does not abort startup — the rest of the API
+// keeps working.
+func startRealtime(ctx context.Context, app *fiber.App, cfg *config.Config) {
+	svc, err := api.SetupRealtime(app, cfg)
+	if err != nil {
+		log.Printf("⚠️  Realtime: setup failed, endpoint disabled: %v", err)
+		return
+	}
+
+	if err := svc.Bootstrap(ctx, cfg.DatabaseURL); err != nil {
+		log.Printf("⚠️  Realtime: bootstrap failed, replicator will not start: %v", err)
+		log.Printf("    Hint: set wal_level=logical and grant REPLICATION to the rapibase role.")
+		// The WebSocket endpoint is mounted but the replicator stays
+		// off; clients can still subscribe to broadcast/presence/rpc
+		// channels — only postgres_changes is unavailable.
+		return
+	}
+
+	log.Printf("✅ Realtime: bootstrap OK (slot=%s publication=%s)",
+		cfg.RealtimeSlotName, cfg.RealtimePublicationName)
+
+	go func() {
+		if err := svc.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			log.Printf("⚠️  Realtime: service exited with error: %v", err)
+		}
+	}()
 }

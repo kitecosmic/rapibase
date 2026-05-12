@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -48,6 +49,17 @@ type Config struct {
 	StorageSecretKey string
 	StorageUseSSL    bool
 	StoragePublicURL string
+
+	// Realtime (WebSocket-based change-data + broadcast + presence + rpc)
+	RealtimeEnabled         bool
+	RealtimeSlotName        string
+	RealtimePublicationName string
+
+	// RealtimeLockKey is the bigint passed to pg_try_advisory_lock for
+	// leader election. Set to a non-zero value when running multiple
+	// rapibase instances against the same Postgres so only one node
+	// consumes the replication slot. Zero (default) means single-node.
+	RealtimeLockKey int64
 }
 
 func Load() *Config {
@@ -91,6 +103,12 @@ func Load() *Config {
 		StorageSecretKey: getEnv("STORAGE_SECRET_KEY", "minioadmin"),
 		StorageUseSSL:    getEnvBool("STORAGE_USE_SSL", false),
 		StoragePublicURL: getEnv("STORAGE_PUBLIC_URL", "http://localhost:9000"),
+
+		// Realtime
+		RealtimeEnabled:         getEnvBool("REALTIME_ENABLED", true),
+		RealtimeSlotName:        getEnv("REALTIME_SLOT_NAME", "rapibase"),
+		RealtimePublicationName: getEnv("REALTIME_PUBLICATION_NAME", "rapibase_realtime"),
+		RealtimeLockKey:         getEnvInt64("REALTIME_LOCK_KEY", 0),
 	}
 }
 
@@ -124,6 +142,18 @@ func getEnvBool(key string, defaultValue bool) bool {
 		return strings.ToLower(strings.TrimSpace(value)) == "true" || value == "1"
 	}
 	return defaultValue
+}
+
+func getEnvInt64(key string, defaultValue int64) int64 {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return defaultValue
+	}
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return defaultValue
+	}
+	return n
 }
 
 // parseDuration parses duration strings like "1h", "24h", "7d", "30d"

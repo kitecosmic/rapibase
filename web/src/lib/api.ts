@@ -414,3 +414,48 @@ export const storage = {
 
   getObjectUrl: (bucket: string, key: string) => `${API_BASE}/storage/buckets/${bucket}/objects/${key}`,
 }
+
+// ---------------------------------------------------------------------
+// Realtime
+// ---------------------------------------------------------------------
+// Lazy singleton client. The dashboard normally only opens one realtime
+// connection at a time; multiple callers of getRealtime() share it.
+// External apps consuming rapibase should import directly from
+// '@/lib/realtime' so they are not coupled to the dashboard's auth
+// store.
+
+import {
+  createRealtimeClient,
+  type RealtimeClient,
+} from './realtime'
+
+let realtimeClient: RealtimeClient | null = null
+
+/**
+ * Returns (or lazily creates) the singleton realtime client for the
+ * dashboard. The apiKey is required on the first call; subsequent
+ * calls ignore it and return the same instance.
+ *
+ * Token rotation: the client picks up the current token from the
+ * auth store on creation; pages that observe token changes should
+ * call `client.setAuth(newToken)` to propagate them.
+ */
+export function getRealtime(apiKey: string): RealtimeClient {
+  if (realtimeClient) return realtimeClient
+  const { token } = useAuthStore.getState()
+  realtimeClient = createRealtimeClient({
+    url: window.location.origin,
+    apiKey,
+    token: token ?? undefined,
+  })
+  return realtimeClient
+}
+
+/**
+ * Tears down the realtime client. Call on logout so the next user's
+ * session starts fresh.
+ */
+export function closeRealtime(): void {
+  realtimeClient?.close()
+  realtimeClient = null
+}

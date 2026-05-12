@@ -64,6 +64,15 @@ services:
 
   db:
     image: postgres:16-alpine
+    # Logical replication is required by rapibase realtime
+    # (postgres_changes subscriptions stream from the WAL). Defaults
+    # for max_wal_senders / max_replication_slots are 10 in PG 13+,
+    # set explicitly here so the value is visible at a glance.
+    command: >
+      postgres
+      -c wal_level=logical
+      -c max_wal_senders=10
+      -c max_replication_slots=10
     environment:
       - POSTGRES_USER=rapibase
       - POSTGRES_PASSWORD=rapibase
