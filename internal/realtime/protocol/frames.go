@@ -87,8 +87,14 @@ type Frame struct {
 	Result   any    `json:"result,omitempty" msgpack:"result,omitempty"`
 
 	// Postgres changes
-	LSN      LSN       `json:"lsn,omitempty" msgpack:"lsn,omitempty"`
-	CommitTS time.Time `json:"commit_ts,omitempty" msgpack:"commit_ts,omitempty"`
+	LSN LSN `json:"lsn,omitempty" msgpack:"lsn,omitempty"`
+	// CommitTS is serialised as a string (RFC3339Nano) rather than a
+	// time.Time because encoding/json does not honour `omitempty` on
+	// struct-valued fields — a zero time would leak as
+	// "0001-01-01T00:00:00Z" into every frame that does not carry a
+	// timestamp (welcome, heartbeat, ack, etc.). String + omitempty
+	// gives the wire we actually want.
+	CommitTS string    `json:"commit_ts,omitempty" msgpack:"commit_ts,omitempty"`
 	DBEvent  EventType `json:"db_event,omitempty" msgpack:"db_event,omitempty"`
 	Schema   string    `json:"schema,omitempty" msgpack:"schema,omitempty"`
 	Table    string    `json:"table,omitempty" msgpack:"table,omitempty"`

@@ -2,7 +2,6 @@ package protocol
 
 import (
 	"testing"
-	"time"
 )
 
 func TestMsgpackCodec_Subprotocol(t *testing.T) {
@@ -58,12 +57,12 @@ func TestMsgpackCodec_RoundTrip_Subscribe(t *testing.T) {
 }
 
 func TestMsgpackCodec_RoundTrip_PostgresChanges(t *testing.T) {
-	now := time.Date(2026, 5, 11, 10, 0, 0, 0, time.UTC)
+	const nowStr = "2026-05-11T10:00:00Z"
 	in := Frame{
 		Type:     FramePostgresChanges,
 		Channel:  "room:42",
 		LSN:      "0/16B3F40",
-		CommitTS: now,
+		CommitTS: nowStr,
 		DBEvent:  EventInsert,
 		Schema:   "public",
 		Table:    "messages",
@@ -82,8 +81,8 @@ func TestMsgpackCodec_RoundTrip_PostgresChanges(t *testing.T) {
 	if out.LSN != in.LSN || out.DBEvent != EventInsert {
 		t.Fatalf("event metadata mismatch: %+v", out)
 	}
-	if !out.CommitTS.Equal(in.CommitTS) {
-		t.Fatalf("commit ts mismatch: %v != %v", out.CommitTS, in.CommitTS)
+	if out.CommitTS != nowStr {
+		t.Fatalf("commit ts mismatch: %q != %q", out.CommitTS, nowStr)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/rapibase/rapibase/internal/realtime/filter"
 	"github.com/rapibase/rapibase/internal/realtime/metrics"
@@ -207,7 +208,7 @@ func (c *Channel) buildEventFrame(sub *Subscriber, ev wal.Event, s pgStream) (pr
 		Type:     protocol.FramePostgresChanges,
 		Channel:  c.name,
 		LSN:      ev.LSN,
-		CommitTS: ev.CommitTS,
+		CommitTS: formatCommitTS(ev.CommitTS),
 		DBEvent:  ev.Type,
 		Schema:   ev.Schema,
 		Table:    ev.Table,
@@ -474,6 +475,17 @@ func defaultColumns(ev wal.Event) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// formatCommitTS serialises the WAL event's commit time for the wire.
+// Returns "" for the zero value so the field is omitted via omitempty
+// — otherwise every event without a real timestamp would emit
+// "0001-01-01T00:00:00Z".
+func formatCommitTS(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339Nano)
 }
 
 // projectRow returns a map containing only the requested columns from
