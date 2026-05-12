@@ -83,6 +83,10 @@ func SetupRealtime(app *fiber.App, cfg *config.Config) (*realtime.Service, error
 	handlers := svc.Handler().FiberHandlers()
 	app.Get("/api/realtime/v1", handlers...)
 
+	// Mount markdown docs endpoints so the dashboard's Realtime tab
+	// (and any external doc site) can render them from one source.
+	MountRealtimeDocs(app)
+
 	// Metrics endpoint: gated by header X-Service-Key (or apikey query
 	// param) matching the project's service key. Scrapers configure
 	// the credential once; anon clients cannot read internal counters.

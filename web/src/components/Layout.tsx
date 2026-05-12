@@ -2,11 +2,11 @@ import { Outlet, Link, useLocation } from 'react-router-dom'
 import { useAuthStore } from '../store/auth'
 import { useQuery } from '@tanstack/react-query'
 import { tables } from '../lib/api'
-import { 
-  Database, 
-  Table2, 
-  Terminal, 
-  Upload, 
+import {
+  Database,
+  Table2,
+  Terminal,
+  Upload,
   Shield,
   LogOut,
   Menu,
@@ -17,7 +17,8 @@ import {
   ChevronLeft,
   ChevronRight,
   HardDrive,
-  ChevronDown
+  ChevronDown,
+  Radio
 } from 'lucide-react'
 import { useState, useEffect } from 'react'
 
@@ -27,6 +28,7 @@ const navigation = [
   { name: 'Tables', href: '/tables', icon: Table2 },
   { name: 'Storage', href: '/storage', icon: HardDrive },
   { name: 'Webhooks', href: '/webhooks', icon: Webhook },
+  { name: 'Realtime', href: '/realtime', icon: Radio },
   { name: 'Notifications', href: '/notifications', icon: Bell },
   { name: 'SQL Editor', href: '/sql', icon: Terminal },
   { name: 'Import', href: '/import', icon: Upload },

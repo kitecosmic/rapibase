@@ -22,6 +22,10 @@ RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /app
 COPY --from=backend-builder /app/rapibase .
 COPY --from=backend-builder /app/web/dist ./web/dist
+# Realtime docs (markdown) are served at /api/realtime/docs/:slug and
+# rendered by the dashboard's Realtime tab. Single source of truth —
+# editing a .md here updates both the in-app docs and rapibase.com.
+COPY --from=backend-builder /app/docs ./docs
 
 EXPOSE 8080
 
