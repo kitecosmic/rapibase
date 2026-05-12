@@ -107,13 +107,24 @@ func (h *Handler) Handle(ctx context.Context, raw rawConn, apiKey, role, userID 
 // negotiated context; the second performs the WebSocket upgrade and
 // runs Handle.
 //
+// Subprotocols MUST be declared on the websocket config: without
+// them, fiberws does not echo back the Sec-WebSocket-Protocol header
+// in the upgrade response, and well-behaved clients (including the
+// ws/wscat reference implementation) refuse the connection with
+// "Server sent no subprotocol".
+//
 // Example wiring in routes.go:
 //
 //	app.Get("/api/realtime/v1", h.FiberHandlers()...)
 func (h *Handler) FiberHandlers() []fiber.Handler {
 	return []fiber.Handler{
 		h.authMiddleware,
-		fiberws.New(h.serveWS),
+		fiberws.New(h.serveWS, fiberws.Config{
+			Subprotocols: []string{
+				protocol.SubprotocolMsgpack,
+				protocol.SubprotocolJSON,
+			},
+		}),
 	}
 }
 
