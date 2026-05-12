@@ -1,0 +1,39 @@
+# =============================================================================
+# Postgres-only stack for running integration tests.
+#
+# Usage (from the repo root):
+#   docker compose -f test/docker-compose.yaml up -d
+#   go test -tags integration ./internal/realtime/wal/...
+#   docker compose -f test/docker-compose.yaml down -v
+#
+# Lives separate from the main docker-compose.yaml so:
+#   - It does not clutter the root.
+#   - The named volume (`rapibase_test_pg`) is independent of dev data.
+#   - The port (5433) does not collide with the dev Postgres (5432) or
+#     a local install.
+# =============================================================================
+
+services:
+  db-test:
+    image: postgres:16-alpine
+    command: >
+      postgres
+      -c wal_level=logical
+      -c max_wal_senders=10
+      -c max_replication_slots=10
+    environment:
+      - POSTGRES_USER=rapibase_test
+      - POSTGRES_PASSWORD=rapibase_test
+      - POSTGRES_DB=rapibase_test
+    ports:
+      - "5433:5432"
+    volumes:
+      - rapibase_test_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rapibase_test"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+volumes:
+  rapibase_test_pg:

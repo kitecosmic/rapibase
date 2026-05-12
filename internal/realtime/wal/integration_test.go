@@ -3,14 +3,14 @@
 // Integration tests for the WAL pipeline against a real Postgres
 // instance. Opt in with:
 //
-//	docker compose -f docker-compose.test.yaml up -d
+//	docker compose -f test/docker-compose.yaml up -d
 //	go test -tags integration ./internal/realtime/wal/...
-//	docker compose -f docker-compose.test.yaml down -v
+//	docker compose -f test/docker-compose.yaml down -v
 //
-// The default connection string targets the docker-compose.test.yaml
-// container (port 5433). Override with RAPIBASE_TEST_DB if your
-// Postgres lives elsewhere — wal_level must still be 'logical' and
-// the user must have REPLICATION.
+// The default connection string targets the test compose container
+// (port 5433). Override with RAPIBASE_TEST_DB if your Postgres lives
+// elsewhere — wal_level must still be 'logical' and the user must
+// have REPLICATION.
 
 package wal
 
