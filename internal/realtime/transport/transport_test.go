@@ -293,6 +293,36 @@ func TestConn_HeartbeatTimeout_ClosesConnection(t *testing.T) {
 	}
 }
 
+// TestConn_CleanClose_DoesNotPanic was added after a production
+// crash: the first-error capture inside Serve used
+// atomic.Value.CompareAndSwap with a nil "old" argument, which panics
+// because atomic.Value cannot do CAS against a never-stored type.
+// Every clean disconnect (= readLoop returning an EOF-shaped error)
+// brought down the binary. Re-introducing that bug must trip this
+// test.
+func TestConn_CleanClose_DoesNotPanic(t *testing.T) {
+	c, fc, sess, cleanup := newTestConn(t, &echoRouter{})
+	defer cleanup()
+
+	done := make(chan error, 1)
+	go func() { done <- c.Serve(context.Background(), ConnOptions{}) }()
+
+	recvFrame(t, fc, sess.Codec(), time.Second) // welcome
+
+	// Simulate the client cleanly closing — the fake's Close() signals
+	// EOF to the next ReadMessage, which is what readLoop sees on a
+	// normal client-initiated close.
+	fc.Close(0, "")
+
+	select {
+	case <-done:
+		// Any return is OK as long as Serve actually returned and
+		// did not panic. If we get here, the bug is not present.
+	case <-time.After(time.Second):
+		t.Fatal("Serve did not return after clean close (possibly panicked)")
+	}
+}
+
 func TestConn_FrameTooLarge_ClosesConnection(t *testing.T) {
 	c, fc, sess, cleanup := newTestConn(t, &echoRouter{})
 	defer cleanup()

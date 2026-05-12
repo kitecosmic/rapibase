@@ -87,45 +87,73 @@ function DocsPane() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // Load the slug list once.
+  // Load the slug list once. Retries once on 5xx (proxy hiccups
+  // after the WebSocket from the Live Monitor tab closes can leave
+  // the first request stuck for ~200ms).
   useEffect(() => {
     let cancelled = false
-    fetch('/api/realtime/docs')
-      .then((r) => r.json())
-      .then((data) => {
-        if (!cancelled) setCategories(data.categories ?? [])
-      })
-      .catch((err) => {
-        if (!cancelled) setError(String(err))
-      })
+    const load = async () => {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const r = await fetch('/api/realtime/docs', { cache: 'no-store' })
+          if (!r.ok) {
+            if (r.status >= 500 && attempt === 0) {
+              await new Promise((res) => setTimeout(res, 300))
+              continue
+            }
+            throw new Error(`HTTP ${r.status}`)
+          }
+          const data = await r.json()
+          if (!cancelled) setCategories(data.categories ?? [])
+          return
+        } catch (err) {
+          if (attempt === 1 && !cancelled) setError(String(err))
+        }
+      }
+    }
+    void load()
     return () => {
       cancelled = true
     }
   }, [])
 
-  // Load the selected doc body.
+  // Load the selected doc body. Same retry-on-5xx behaviour as the
+  // category list — the dashboard regularly switches between this
+  // pane and Live Monitor, which closes a WebSocket that can briefly
+  // confuse the reverse proxy's connection pool.
   useEffect(() => {
     if (!selected) return
     let cancelled = false
     setLoading(true)
     setError(null)
-    fetch(`/api/realtime/docs/${selected}`)
-      .then((r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`)
-        return r.text()
-      })
-      .then((text) => {
-        if (!cancelled) {
-          setBody(text)
-          setLoading(false)
+    const load = async () => {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const r = await fetch(`/api/realtime/docs/${selected}`, {
+            cache: 'no-store',
+          })
+          if (!r.ok) {
+            if (r.status >= 500 && attempt === 0) {
+              await new Promise((res) => setTimeout(res, 300))
+              continue
+            }
+            throw new Error(`HTTP ${r.status}`)
+          }
+          const text = await r.text()
+          if (!cancelled) {
+            setBody(text)
+            setLoading(false)
+          }
+          return
+        } catch (err) {
+          if (attempt === 1 && !cancelled) {
+            setError(String(err))
+            setLoading(false)
+          }
         }
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          setError(String(err))
-          setLoading(false)
-        }
-      })
+      }
+    }
+    void load()
     return () => {
       cancelled = true
     }

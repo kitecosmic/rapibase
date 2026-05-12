@@ -123,12 +123,30 @@ func (c *Conn) Serve(ctx context.Context, opts ConnOptions) error {
 	defer cancel()
 	defer c.sess.markClosed()
 
-	var firstErr atomic.Value
+	// First-error capture across the read/write goroutines.
+	// sync.Once guarantees exactly one writer wins and never panics
+	// — atomic.Value.CompareAndSwap rejects nil-as-old when the
+	// value has never been stored, which previously crashed the
+	// process on every clean disconnect.
+	var (
+		firstErr   error
+		firstErrMu sync.Mutex
+		firstErrOK sync.Once
+	)
 	setErr := func(err error) {
 		if err == nil {
 			return
 		}
-		firstErr.CompareAndSwap(nil, err)
+		firstErrOK.Do(func() {
+			firstErrMu.Lock()
+			firstErr = err
+			firstErrMu.Unlock()
+		})
+	}
+	readFirstErr := func() error {
+		firstErrMu.Lock()
+		defer firstErrMu.Unlock()
+		return firstErr
 	}
 
 	var wg sync.WaitGroup
@@ -146,20 +164,21 @@ func (c *Conn) Serve(ctx context.Context, opts ConnOptions) error {
 
 	wg.Wait()
 
-	c.closeRaw(firstErr.Load())
-	if e, _ := firstErr.Load().(error); e != nil {
+	e := readFirstErr()
+	c.closeRaw(e)
+	if e != nil {
 		return e
 	}
 	return ctx.Err()
 }
 
-func (c *Conn) closeRaw(firstErr any) {
+func (c *Conn) closeRaw(firstErr error) {
 	if c.closed.Swap(true) {
 		return
 	}
 	code := 1000
 	reason := ""
-	if err, _ := firstErr.(error); err != nil {
+	if err := firstErr; err != nil {
 		switch {
 		case errors.Is(err, errFrameTooLarge):
 			code = protocol.ClosePayloadTooLarge
