@@ -10,9 +10,12 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/rapibase/rapibase/internal/models"
+	"golang.org/x/text/encoding/charmap"
+	"golang.org/x/text/transform"
 )
 
 // jsonBatchSize controls how many rows are flushed per INSERT batch when
@@ -400,6 +403,18 @@ func (db *DB) ImportCSV(ctx context.Context, tableName string, reader io.Reader,
 		_, _ = br.Discard(3)
 	}
 
+	// Encoding sniff. Postgres' COPY requires the input to match the
+	// database client_encoding (UTF-8 by default). If the first chunk is
+	// not valid UTF-8, assume Windows-1252 — the encoding Excel uses by
+	// default for "CSV (Comma delimited)" exports in Spanish/Western
+	// European locales — and transcode the entire stream on the fly.
+	if peek, _ := br.Peek(64 * 1024); len(peek) > 0 && !utf8.Valid(peek) {
+		br = bufio.NewReaderSize(
+			transform.NewReader(br, charmap.Windows1252.NewDecoder()),
+			64*1024,
+		)
+	}
+
 	headerLine, err := br.ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
 		return 0, fmt.Errorf("failed to read CSV header: %w", err)
@@ -409,7 +424,13 @@ func (db *DB) ImportCSV(ctx context.Context, tableName string, reader io.Reader,
 		return 0, fmt.Errorf("CSV file is empty")
 	}
 
+	// Sniff the delimiter. Defaults to comma; picks ; | or tab if any of
+	// them appears more often in the header (Spanish/European exports use
+	// ; because comma is the decimal separator).
+	delim := detectDelimiter(headerLine)
+
 	hdrReader := csv.NewReader(strings.NewReader(headerLine))
+	hdrReader.Comma = delim
 	hdrReader.TrimLeadingSpace = true
 	headers, err := hdrReader.Read()
 	if err != nil {
@@ -451,7 +472,9 @@ func (db *DB) ImportCSV(ctx context.Context, tableName string, reader io.Reader,
 			return 0, nil
 		}
 
-		firstRecord, err := csv.NewReader(strings.NewReader(firstDataLine)).Read()
+		firstRowParser := csv.NewReader(strings.NewReader(firstDataLine))
+		firstRowParser.Comma = delim
+		firstRecord, err := firstRowParser.Read()
 		if err != nil {
 			return 0, fmt.Errorf("failed to parse first data row: %w", err)
 		}
@@ -460,7 +483,7 @@ func (db *DB) ImportCSV(ctx context.Context, tableName string, reader io.Reader,
 		if idEmpty {
 			copyHeaders = sliceDropAt(normalizedHeaders, idIdx)
 			pr, pw := io.Pipe()
-			go restreamWithoutColumn(pw, firstRecord, br, idIdx)
+			go restreamWithoutColumn(pw, firstRecord, br, idIdx, delim)
 			copyReader = pr
 			cleanup = func() { _ = pr.Close() }
 		} else {
@@ -483,9 +506,10 @@ func (db *DB) ImportCSV(ctx context.Context, tableName string, reader io.Reader,
 	defer conn.Release()
 
 	copySQL := fmt.Sprintf(
-		`COPY %s (%s) FROM STDIN WITH (FORMAT csv, HEADER false, NULL '')`,
+		`COPY %s (%s) FROM STDIN WITH (FORMAT csv, HEADER false, NULL '', DELIMITER %s)`,
 		quoteIdentifier(tableName),
 		strings.Join(quoted, ", "),
+		delimiterSQL(delim),
 	)
 
 	tag, err := conn.Conn().PgConn().CopyFrom(ctx, copyReader, copySQL)
@@ -502,8 +526,9 @@ func (db *DB) ImportCSV(ctx context.Context, tableName string, reader io.Reader,
 // Runs in its own goroutine; closes the pipe writer on completion so the
 // COPY reader sees EOF. On parse error it propagates via CloseWithError so
 // the COPY call fails fast instead of hanging on a half-written stream.
-func restreamWithoutColumn(pw *io.PipeWriter, firstRecord []string, src io.Reader, dropIdx int) {
+func restreamWithoutColumn(pw *io.PipeWriter, firstRecord []string, src io.Reader, dropIdx int, delim rune) {
 	cw := csv.NewWriter(pw)
+	cw.Comma = delim
 	closeErr := func() error {
 		cw.Flush()
 		return cw.Error()
@@ -515,6 +540,7 @@ func restreamWithoutColumn(pw *io.PipeWriter, firstRecord []string, src io.Reade
 	}
 
 	cr := csv.NewReader(src)
+	cr.Comma = delim
 	cr.TrimLeadingSpace = true
 	cr.FieldsPerRecord = -1 // tolerate ragged rows; COPY will surface column-count errors
 	for {
@@ -536,6 +562,35 @@ func restreamWithoutColumn(pw *io.PipeWriter, firstRecord []string, src io.Reade
 		return
 	}
 	_ = pw.Close()
+}
+
+// detectDelimiter returns the most likely CSV delimiter found in headerLine.
+// Counts occurrences of comma, semicolon, tab, and pipe; the most frequent
+// wins, with comma as the tie-break. Sufficient for the real-world cases we
+// see (Excel exports in EN, ES, FR, DE locales; TSV dumps).
+func detectDelimiter(headerLine string) rune {
+	counts := map[rune]int{',': 0, ';': 0, '\t': 0, '|': 0}
+	for _, c := range headerLine {
+		if _, ok := counts[c]; ok {
+			counts[c]++
+		}
+	}
+	best, bestN := ',', counts[',']
+	for _, d := range []rune{';', '\t', '|'} {
+		if counts[d] > bestN {
+			best, bestN = d, counts[d]
+		}
+	}
+	return best
+}
+
+// delimiterSQL formats a delimiter for COPY's DELIMITER option. Tab needs
+// the E'\t' escape form; the rest are safe in plain single quotes.
+func delimiterSQL(d rune) string {
+	if d == '\t' {
+		return `E'\t'`
+	}
+	return fmt.Sprintf(`'%c'`, d)
 }
 
 func indexOfFold(slice []string, target string) int {

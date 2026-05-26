@@ -13,6 +13,17 @@ function formatBytes(b: number): string {
   return `${(b / (1024 * 1024 * 1024)).toFixed(2)} GB`
 }
 
+// Mirrors isValidIdentifier in internal/database/schema.go so we never let the
+// user start a multi-MB upload only to have the server reject the name.
+function validateTableName(name: string): string | null {
+  if (!name) return null
+  if (name.length > 63) return 'Maximum 63 characters'
+  if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) {
+    return 'Only letters, numbers and underscores. Cannot start with a number.'
+  }
+  return null
+}
+
 export default function Import() {
   const queryClient = useQueryClient()
   const sqlFileRef = useRef<HTMLInputElement>(null)
@@ -131,6 +142,11 @@ export default function Import() {
   }
 
   const tableList = tablesData?.tables || []
+
+  const jsonNameError = jsonCreateNewTable ? validateTableName(jsonNewTableName) : null
+  const csvNameError = csvCreateNewTable ? validateTableName(csvNewTableName) : null
+  const jsonNameInvalid = jsonCreateNewTable && (!jsonNewTableName || jsonNameError !== null)
+  const csvNameInvalid = csvCreateNewTable && (!csvNewTableName || csvNameError !== null)
 
   return (
     <div>
@@ -289,8 +305,15 @@ export default function Import() {
                 onChange={(e) => setJsonNewTableName(e.target.value)}
                 disabled={!jsonCreateNewTable}
                 placeholder="Enter table name..."
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 outline-none disabled:bg-gray-100 disabled:cursor-not-allowed text-sm"
+                className={`w-full px-3 py-2 border rounded-lg focus:ring-2 outline-none disabled:bg-gray-100 disabled:cursor-not-allowed text-sm ${
+                  jsonNameError
+                    ? 'border-red-400 focus:ring-red-500 focus:border-red-500'
+                    : 'border-gray-300 focus:ring-green-500 focus:border-green-500'
+                }`}
               />
+              {jsonNameError && (
+                <p className="mt-1 text-xs text-red-600">{jsonNameError}</p>
+              )}
             </div>
           </div>
 
@@ -318,7 +341,7 @@ export default function Import() {
 
           <button
             onClick={() => jsonFileRef.current?.click()}
-            disabled={jsonMutation.isPending || (!jsonCreateNewTable && !jsonTable) || (jsonCreateNewTable && !jsonNewTableName)}
+            disabled={jsonMutation.isPending || (!jsonCreateNewTable && !jsonTable) || jsonNameInvalid}
             className="w-full flex items-center justify-center gap-2 px-4 py-3 border-2 border-dashed border-gray-300 rounded-lg text-gray-600 hover:border-green-500 hover:text-green-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {jsonMutation.isPending ? (
@@ -389,8 +412,15 @@ export default function Import() {
                 onChange={(e) => setCsvNewTableName(e.target.value)}
                 disabled={!csvCreateNewTable}
                 placeholder="Enter table name..."
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none disabled:bg-gray-100 disabled:cursor-not-allowed"
+                className={`w-full px-3 py-2 border rounded-lg focus:ring-2 outline-none disabled:bg-gray-100 disabled:cursor-not-allowed ${
+                  csvNameError
+                    ? 'border-red-400 focus:ring-red-500 focus:border-red-500'
+                    : 'border-gray-300 focus:ring-orange-500 focus:border-orange-500'
+                }`}
               />
+              {csvNameError && (
+                <p className="mt-1 text-xs text-red-600">{csvNameError}</p>
+              )}
             </div>
           </div>
 
@@ -418,7 +448,7 @@ export default function Import() {
 
           <button
             onClick={() => csvFileRef.current?.click()}
-            disabled={csvMutation.isPending || (!csvCreateNewTable && !csvTable) || (csvCreateNewTable && !csvNewTableName)}
+            disabled={csvMutation.isPending || (!csvCreateNewTable && !csvTable) || csvNameInvalid}
             className="w-full flex items-center justify-center gap-2 px-4 py-3 border-2 border-dashed border-gray-300 rounded-lg text-gray-600 hover:border-orange-500 hover:text-orange-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {csvMutation.isPending ? (

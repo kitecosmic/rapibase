@@ -295,6 +295,11 @@ func (db *DB) DropTable(ctx context.Context, tableName string) error {
 	return err
 }
 
+// IsValidIdentifier exposes the SQL identifier check so HTTP handlers can
+// reject bad names before consuming a multi-MB upload body. Mirrors the
+// rules used by all internal callers (lowercase wrapper below).
+func IsValidIdentifier(name string) bool { return isValidIdentifier(name) }
+
 // Helper functions
 func isValidIdentifier(name string) bool {
 	if len(name) == 0 || len(name) > 63 {

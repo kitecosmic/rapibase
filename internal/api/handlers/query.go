@@ -150,6 +150,11 @@ func (h *QueryHandler) ImportJSON(c *fiber.Ctx) error {
 			"error": "Table name is required",
 		})
 	}
+	if !database.IsValidIdentifier(tableName) {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "Invalid table name: only letters, numbers and underscores (max 63 chars, cannot start with a number)",
+		})
+	}
 	autoCreate := c.Query("auto_create", "true") == "true"
 
 	reader, cleanup, ok, err := streamUploadedFile(c)
@@ -178,6 +183,11 @@ func (h *QueryHandler) ImportCSV(c *fiber.Ctx) error {
 	if tableName == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error": "Table name is required",
+		})
+	}
+	if !database.IsValidIdentifier(tableName) {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "Invalid table name: only letters, numbers and underscores (max 63 chars, cannot start with a number)",
 		})
 	}
 	autoCreate := c.Query("auto_create", "true") == "true"
