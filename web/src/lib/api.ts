@@ -265,8 +265,18 @@ export const importExport = {
   importJSON: (table: string, file: File, autoCreate: boolean = true, opts?: UploadOpts) =>
     xhrUpload<{ rows_affected: number }>(`/import/json/${table}?auto_create=${autoCreate}`, file, opts),
 
-  importCSV: (table: string, file: File, autoCreate: boolean = true, opts?: UploadOpts) =>
-    xhrUpload<{ rows_affected: number }>(`/import/csv/${table}?auto_create=${autoCreate}`, file, opts),
+  importCSV: (
+    table: string,
+    file: File,
+    autoCreate: boolean = true,
+    delimiter: 'auto' | 'comma' | 'semicolon' | 'tab' | 'pipe' = 'auto',
+    opts?: UploadOpts,
+  ) =>
+    xhrUpload<{ rows_affected: number }>(
+      `/import/csv/${table}?auto_create=${autoCreate}&delimiter=${delimiter}`,
+      file,
+      opts,
+    ),
 
   exportTable: (table: string, format: 'json' | 'sql' = 'json') =>
     authedFetch(`/export/${table}?format=${format}`).then((res) => res.blob()),

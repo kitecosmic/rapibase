@@ -391,7 +391,10 @@ func truncate(s string, maxLen int) string {
 //   - id cell filled → "explicit mode": include id in COPY's column list and
 //     stream the body verbatim. Faster, no re-stream cost.
 //   - no id column   → fast path: stream verbatim.
-func (db *DB) ImportCSV(ctx context.Context, tableName string, reader io.Reader, autoCreateColumns bool) (int64, error) {
+//
+// delimOverride: pass 0 to auto-detect from the header line; pass a specific
+// rune (',', ';', '\t', '|') to force it.
+func (db *DB) ImportCSV(ctx context.Context, tableName string, reader io.Reader, autoCreateColumns bool, delimOverride rune) (int64, error) {
 	if !isValidIdentifier(tableName) {
 		return 0, fmt.Errorf("invalid table name")
 	}
@@ -424,10 +427,12 @@ func (db *DB) ImportCSV(ctx context.Context, tableName string, reader io.Reader,
 		return 0, fmt.Errorf("CSV file is empty")
 	}
 
-	// Sniff the delimiter. Defaults to comma; picks ; | or tab if any of
-	// them appears more often in the header (Spanish/European exports use
-	// ; because comma is the decimal separator).
-	delim := detectDelimiter(headerLine)
+	// Use the explicit override when provided, otherwise sniff the
+	// delimiter from the header line.
+	delim := delimOverride
+	if delim == 0 {
+		delim = detectDelimiter(headerLine)
+	}
 
 	hdrReader := csv.NewReader(strings.NewReader(headerLine))
 	hdrReader.Comma = delim

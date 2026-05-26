@@ -41,6 +41,7 @@ export default function Import() {
   const [csvNewTableName, setCsvNewTableName] = useState('')
   const [csvCreateNewTable, setCsvCreateNewTable] = useState(false)
   const [csvAutoCreate, setCsvAutoCreate] = useState(true)
+  const [csvDelimiter, setCsvDelimiter] = useState<'auto' | 'comma' | 'semicolon' | 'tab' | 'pipe'>('auto')
   
   const [result, setResult] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
   const [active, setActive] = useState<ProgressState | null>(null)
@@ -98,8 +99,8 @@ export default function Import() {
   })
 
   const csvMutation = useMutation({
-    mutationFn: ({ table, file, autoCreate }: { table: string; file: File; autoCreate: boolean }) =>
-      importExport.importCSV(table, file, autoCreate, trackProgress('csv', file)),
+    mutationFn: ({ table, file, autoCreate, delimiter }: { table: string; file: File; autoCreate: boolean; delimiter: typeof csvDelimiter }) =>
+      importExport.importCSV(table, file, autoCreate, delimiter, trackProgress('csv', file)),
     onSuccess: (data) => {
       setResult({ type: 'success', message: `CSV import completed. ${data.rows_affected} rows imported.` })
       queryClient.invalidateQueries({ queryKey: ['tables'] })
@@ -137,7 +138,7 @@ export default function Import() {
     const tableName = csvCreateNewTable ? csvNewTableName : csvTable
     if (file && tableName) {
       setResult(null)
-      csvMutation.mutate({ table: tableName, file, autoCreate: csvAutoCreate })
+      csvMutation.mutate({ table: tableName, file, autoCreate: csvAutoCreate, delimiter: csvDelimiter })
     }
   }
 
@@ -424,7 +425,7 @@ export default function Import() {
             </div>
           </div>
 
-          <div className="mb-4">
+          <div className="mb-4 flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-6">
             <label className="flex items-center gap-2">
               <input
                 type="checkbox"
@@ -433,9 +434,23 @@ export default function Import() {
                 className="rounded text-orange-600 focus:ring-orange-500"
               />
               <span className="text-sm text-gray-700">
-                Auto-create missing columns (columns will be created as TEXT type)
+                Auto-create missing columns (TEXT)
               </span>
             </label>
+            <div className="flex items-center gap-2">
+              <label className="text-sm text-gray-700 whitespace-nowrap">Delimiter:</label>
+              <select
+                value={csvDelimiter}
+                onChange={(e) => setCsvDelimiter(e.target.value as typeof csvDelimiter)}
+                className="px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none"
+              >
+                <option value="auto">Auto-detect</option>
+                <option value="comma">, (comma)</option>
+                <option value="semicolon">; (semicolon)</option>
+                <option value="tab">Tab</option>
+                <option value="pipe">| (pipe)</option>
+              </select>
+            </div>
           </div>
 
           <input

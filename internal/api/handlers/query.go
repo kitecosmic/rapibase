@@ -13,6 +13,25 @@ import (
 	"github.com/rapibase/rapibase/internal/models"
 )
 
+// parseDelimiter maps the optional ?delimiter= query value to a rune for
+// ImportCSV. Empty/"auto" yields 0, signalling the importer to auto-detect.
+func parseDelimiter(q string) (rune, error) {
+	switch strings.ToLower(strings.TrimSpace(q)) {
+	case "", "auto":
+		return 0, nil
+	case "comma", ",":
+		return ',', nil
+	case "semicolon", ";":
+		return ';', nil
+	case "tab", "\\t", "\t":
+		return '\t', nil
+	case "pipe", "|":
+		return '|', nil
+	default:
+		return 0, fmt.Errorf("invalid delimiter %q: use auto, comma, semicolon, tab, or pipe", q)
+	}
+}
+
 // streamUploadedFile returns an io.Reader over the multipart "file" part of
 // the request. It tries two paths, in order:
 //
@@ -192,6 +211,11 @@ func (h *QueryHandler) ImportCSV(c *fiber.Ctx) error {
 	}
 	autoCreate := c.Query("auto_create", "true") == "true"
 
+	delim, err := parseDelimiter(c.Query("delimiter"))
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+	}
+
 	reader, cleanup, ok, err := streamUploadedFile(c)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
@@ -201,7 +225,7 @@ func (h *QueryHandler) ImportCSV(c *fiber.Ctx) error {
 	}
 	defer cleanup()
 
-	affected, err := h.db.ImportCSV(c.Context(), tableName, reader, autoCreate)
+	affected, err := h.db.ImportCSV(c.Context(), tableName, reader, autoCreate, delim)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}
