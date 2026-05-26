@@ -193,49 +193,80 @@ export const query = {
     }),
 }
 
+export type UploadProgress = { loaded: number; total: number; phase: 'uploading' | 'processing' }
+export type UploadOpts = {
+  onProgress?: (p: UploadProgress) => void
+  signal?: AbortSignal
+}
+
+// xhrUpload posts a multipart form using XMLHttpRequest so the caller can
+// observe real upload progress (fetch does not expose request body progress
+// in any browser without flags). On 401 it transparently refreshes the
+// access token and retries once.
+function xhrUpload<T>(endpoint: string, file: File, opts?: UploadOpts, isRetry = false): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const formData = new FormData()
+    formData.append('file', file)
+
+    const { token } = useAuthStore.getState()
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', `${API_BASE}${endpoint}`)
+    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+
+    xhr.upload.onprogress = (e) => {
+      if (opts?.onProgress && e.lengthComputable) {
+        opts.onProgress({ loaded: e.loaded, total: e.total, phase: 'uploading' })
+      }
+    }
+    xhr.upload.onload = () => {
+      // Bytes are flushed; server is now running COPY/batch inserts.
+      if (opts?.onProgress) {
+        opts.onProgress({ loaded: file.size, total: file.size, phase: 'processing' })
+      }
+    }
+
+    xhr.onload = async () => {
+      if (xhr.status === 401 && !isRetry) {
+        const newToken = await refreshAccessToken()
+        if (newToken) {
+          try {
+            resolve(await xhrUpload<T>(endpoint, file, opts, true))
+          } catch (e) {
+            reject(e)
+          }
+          return
+        }
+      }
+      let data: any = {}
+      try { data = JSON.parse(xhr.responseText) } catch { /* keep {} */ }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(data as T)
+      } else {
+        reject(new ApiError(xhr.status, data.error || `HTTP ${xhr.status}`))
+      }
+    }
+    xhr.onerror = () => reject(new ApiError(0, 'Network error (connection lost during upload)'))
+    xhr.onabort = () => reject(new ApiError(0, 'Upload aborted'))
+
+    if (opts?.signal) {
+      if (opts.signal.aborted) { xhr.abort(); return }
+      opts.signal.addEventListener('abort', () => xhr.abort())
+    }
+
+    xhr.send(formData)
+  })
+}
+
 // Import/Export
 export const importExport = {
-  importSQL: async (file: File) => {
-    const formData = new FormData()
-    formData.append('file', file)
+  importSQL: (file: File, opts?: UploadOpts) =>
+    xhrUpload<{ rows_affected: number }>(`/import/sql`, file, opts),
 
-    const response = await authedFetch(`/import/sql`, {
-      method: 'POST',
-      body: formData,
-    })
+  importJSON: (table: string, file: File, autoCreate: boolean = true, opts?: UploadOpts) =>
+    xhrUpload<{ rows_affected: number }>(`/import/json/${table}?auto_create=${autoCreate}`, file, opts),
 
-    const data = await response.json()
-    if (!response.ok) throw new ApiError(response.status, data.error)
-    return data
-  },
-
-  importJSON: async (table: string, file: File, autoCreate: boolean = true) => {
-    const formData = new FormData()
-    formData.append('file', file)
-
-    const response = await authedFetch(`/import/json/${table}?auto_create=${autoCreate}`, {
-      method: 'POST',
-      body: formData,
-    })
-
-    const data = await response.json()
-    if (!response.ok) throw new ApiError(response.status, data.error)
-    return data
-  },
-
-  importCSV: async (table: string, file: File, autoCreate: boolean = true) => {
-    const formData = new FormData()
-    formData.append('file', file)
-
-    const response = await authedFetch(`/import/csv/${table}?auto_create=${autoCreate}`, {
-      method: 'POST',
-      body: formData,
-    })
-
-    const data = await response.json()
-    if (!response.ok) throw new ApiError(response.status, data.error)
-    return data
-  },
+  importCSV: (table: string, file: File, autoCreate: boolean = true, opts?: UploadOpts) =>
+    xhrUpload<{ rows_affected: number }>(`/import/csv/${table}?auto_create=${autoCreate}`, file, opts),
 
   exportTable: (table: string, format: 'json' | 'sql' = 'json') =>
     authedFetch(`/export/${table}?format=${format}`).then((res) => res.blob()),

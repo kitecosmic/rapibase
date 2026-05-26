@@ -1,7 +1,17 @@
 import { useState, useRef } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { importExport, tables } from '../lib/api'
-import { Upload, FileJson, FileCode, FileSpreadsheet, Loader2, CheckCircle, AlertCircle } from 'lucide-react'
+import { importExport, tables, type UploadProgress } from '../lib/api'
+import { Upload, FileJson, FileCode, FileSpreadsheet, Loader2, CheckCircle, AlertCircle, X } from 'lucide-react'
+
+type ImportKind = 'sql' | 'json' | 'csv'
+type ProgressState = { kind: ImportKind; fileName: string; fileSize: number; progress: UploadProgress | null }
+
+function formatBytes(b: number): string {
+  if (b < 1024) return `${b} B`
+  if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`
+  if (b < 1024 * 1024 * 1024) return `${(b / (1024 * 1024)).toFixed(1)} MB`
+  return `${(b / (1024 * 1024 * 1024)).toFixed(2)} GB`
+}
 
 export default function Import() {
   const queryClient = useQueryClient()
@@ -22,50 +32,77 @@ export default function Import() {
   const [csvAutoCreate, setCsvAutoCreate] = useState(true)
   
   const [result, setResult] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
+  const [active, setActive] = useState<ProgressState | null>(null)
+  const abortRef = useRef<AbortController | null>(null)
 
   const { data: tablesData } = useQuery({
     queryKey: ['tables'],
     queryFn: tables.list,
   })
 
+  const trackProgress = (kind: ImportKind, file: File) => {
+    const controller = new AbortController()
+    abortRef.current = controller
+    setActive({ kind, fileName: file.name, fileSize: file.size, progress: null })
+    return {
+      signal: controller.signal,
+      onProgress: (p: UploadProgress) => {
+        setActive((prev) => (prev ? { ...prev, progress: p } : prev))
+      },
+    }
+  }
+
+  const clearActive = () => {
+    abortRef.current = null
+    setActive(null)
+  }
+
   const sqlMutation = useMutation({
-    mutationFn: (file: File) => importExport.importSQL(file),
+    mutationFn: (file: File) => importExport.importSQL(file, trackProgress('sql', file)),
     onSuccess: (data) => {
       setResult({ type: 'success', message: `SQL import completed. ${data.rows_affected} rows affected.` })
       queryClient.invalidateQueries({ queryKey: ['tables'] })
+      clearActive()
     },
     onError: (err: any) => {
       setResult({ type: 'error', message: err.message })
+      clearActive()
     },
   })
 
   const jsonMutation = useMutation({
-    mutationFn: ({ table, file, autoCreate }: { table: string; file: File; autoCreate: boolean }) => 
-      importExport.importJSON(table, file, autoCreate),
+    mutationFn: ({ table, file, autoCreate }: { table: string; file: File; autoCreate: boolean }) =>
+      importExport.importJSON(table, file, autoCreate, trackProgress('json', file)),
     onSuccess: (data) => {
       setResult({ type: 'success', message: `JSON import completed. ${data.rows_affected} rows imported.` })
       queryClient.invalidateQueries({ queryKey: ['tables'] })
+      clearActive()
       if (jsonFileRef.current) jsonFileRef.current.value = ''
     },
     onError: (err: any) => {
       setResult({ type: 'error', message: err.message })
+      clearActive()
       if (jsonFileRef.current) jsonFileRef.current.value = ''
     },
   })
 
   const csvMutation = useMutation({
-    mutationFn: ({ table, file, autoCreate }: { table: string; file: File; autoCreate: boolean }) => 
-      importExport.importCSV(table, file, autoCreate),
+    mutationFn: ({ table, file, autoCreate }: { table: string; file: File; autoCreate: boolean }) =>
+      importExport.importCSV(table, file, autoCreate, trackProgress('csv', file)),
     onSuccess: (data) => {
       setResult({ type: 'success', message: `CSV import completed. ${data.rows_affected} rows imported.` })
       queryClient.invalidateQueries({ queryKey: ['tables'] })
+      clearActive()
       if (csvFileRef.current) csvFileRef.current.value = ''
     },
     onError: (err: any) => {
       setResult({ type: 'error', message: err.message })
+      clearActive()
       if (csvFileRef.current) csvFileRef.current.value = ''
     },
   })
+
+  const cancelUpload = () => abortRef.current?.abort()
 
   const handleSQLUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -114,6 +151,44 @@ export default function Import() {
           <p>{result.message}</p>
         </div>
       )}
+
+      {active && (() => {
+        const loaded = active.progress?.loaded ?? 0
+        const total = active.progress?.total ?? active.fileSize
+        const pct = total > 0 ? Math.min(100, Math.round((loaded / total) * 100)) : 0
+        const phase = active.progress?.phase ?? 'uploading'
+        return (
+          <div className="mb-6 p-4 rounded-lg bg-blue-50 border border-blue-200">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2 text-blue-800 text-sm font-medium min-w-0">
+                <Loader2 className="w-4 h-4 animate-spin flex-shrink-0" />
+                <span className="truncate">{active.fileName}</span>
+                <span className="text-blue-600 flex-shrink-0">({formatBytes(active.fileSize)})</span>
+              </div>
+              <button
+                onClick={cancelUpload}
+                className="text-blue-700 hover:text-blue-900 p-1 rounded hover:bg-blue-100"
+                title="Cancel upload"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="w-full bg-blue-200 rounded-full h-2 overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-all ${phase === 'processing' ? 'bg-blue-400 animate-pulse' : 'bg-blue-600'}`}
+                style={{ width: `${phase === 'processing' ? 100 : pct}%` }}
+              />
+            </div>
+            <div className="mt-2 text-xs text-blue-700 flex justify-between">
+              <span>
+                {phase === 'uploading'
+                  ? `Uploading: ${formatBytes(loaded)} / ${formatBytes(total)} (${pct}%)`
+                  : 'Server is importing — bulk loading into Postgres…'}
+              </span>
+            </div>
+          </div>
+        )
+      })()}
 
       <div className="grid md:grid-cols-2 gap-6">
         {/* SQL Import */}

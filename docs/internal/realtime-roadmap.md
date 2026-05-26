@@ -1,49 +1,20 @@
 # Rapibase Realtime — Roadmap
 
-Este documento captura **lo que falta** para que rapibase realtime no
-solo iguale a los BaaS existentes, sino que los supere en dos dimensiones
-donde típicamente fracasan: **escala** (cuántas operaciones por segundo
-puede sostener un nodo) y **adaptabilidad a IA** (cómo el realtime se
-vuelve la columna vertebral de agentes y aplicaciones AI-first).
+Lo que **falta**. Lo que ya está implementado y deployado vive en el
+estado actual del repo y se valida con `go test ./...` + el dashboard
+en `/realtime`.
 
-El estado actual ya cubre el camino feliz: postgres_changes filtrados
-por permisos, broadcast, presence, RPC sobre el mismo socket, resume
-con LSN, codecs JSON+msgpack, leader election, decoder pgoutput real.
-Lo que viene aquí es **producción seria** y **diferenciador competitivo**.
+Para la lista de lo ya hecho (referencia histórica), ver el git log o
+`docs/realtime/`.
 
 ---
 
-## 1. Pendientes inmediatos (cierre del ciclo dev-facing)
+## 1. Pendientes de cierre dev-facing
 
-Sin esto, rapibase realtime funciona pero no es agradable de usar.
+### 1.1 `bus/nats` para multi-nodo
 
-### 1.1 SDK TypeScript
-
-Hoy solo se puede conectar con `wscat` crudo. El SDK convierte el wire
-en una API tipada y declarativa que el dev usa en su app.
-
-- Vive en `web/src/lib/realtime/`, listo para extraerse a un paquete
-  `@rapibase/client` publicable a npm cuando llegue ese momento.
-- Cubre: `createClient`, `channel.subscribe/onChange/broadcast/track/invoke`,
-  reconexión transparente con resume, tipos generados desde el schema
-  de la DB vía codegen (`@rapibase/cli gen-types`).
-- Contrato completo en [`sdk.md`](sdk.md).
-
-### 1.2 Integration tests del WAL contra Postgres real
-
-Decoder, replicator y leader tienen unit tests con fixtures, pero el
-camino end-to-end "INSERT en Postgres → frame en el cliente" sólo se
-valida operacionalmente al primer deploy. Necesario:
-
-- `wal/integration_test.go` con build tag `integration`.
-- `docker-compose.test.yaml` que levanta Postgres con
-  `wal_level=logical` + crea publication y slot.
-- Suite que mete inserts/updates/deletes/truncates y asserta los
-  events que salen del decoder, contra fixtures de relations reales.
-
-### 1.3 `bus/nats` para multi-nodo
-
-El contrato `Bus` ya está. Implementarlo requiere:
+El contrato `Bus` ya está; `bus.Local` cubre single-node. Para escalar
+horizontalmente:
 
 - Wrapper sobre `nats.go` que serializa/deserializa eventos al subject
   `rapibase.realtime.events`.
@@ -53,61 +24,21 @@ El contrato `Bus` ya está. Implementarlo requiere:
   quiere correr un cluster NATS aparte. Para deployments pequeños es
   un binario más en el mismo proceso.
 
-### 1.4 Métricas conectadas
-
-`metrics.Recorder` existe; sólo falta llamarlo en los puntos calientes:
-
-- `hub.fanout` → `MetricEventsPublished` con labels `schema/table`.
-- `Channel.deliverEvent` → `MetricEventsDelivered` por delivery exitoso,
-  `MetricEventsDropped` por queue full.
-- `Subscriber.enqueue` que retorna `false` → `MetricSlowConsumerEvictions`.
-- `Replicator.appliedLSN` vs `IdentifySystem.XLogPos` → `MetricWALLagBytes`.
-- `Invoker.Call` → `MetricRPCCalls{function,status}` + `MetricRPCDuration`.
-
-Sin estas métricas conectadas, el sistema es operacionalmente ciego en
-producción.
-
-### 1.5 Rate limiting por conexión
-
-`rpc.Definition.RatePerSec` está como metadata pero nadie lo aplica.
-Necesario en el transport:
-
-- `Session` mantiene un `map[string]*tokenBucket` por función.
-- `readLoop`, antes de despachar un `FrameRPC`, consume un token del
-  bucket de esa función.
-- Similar para `FrameBroadcastIn` con un bucket global per-conexión.
-- Excede → `protocol.ErrRateLimited` con `RetryMs`.
+Hasta que un solo nodo se sature, no hay urgencia. Pero el contrato
+ya quedó listo para enchufar cuando llegue el día.
 
 ---
 
-## 2. Camino a "muchas operaciones" (el desafío que otros BaaS fallan)
+## 2. Camino a "muchas operaciones"
 
-Supabase Realtime históricamente ha tenido problemas escalando más
-allá de 10-20k conexiones concurrentes por nodo, y Postgres Changes
-es especialmente caro cuando hay muchos suscriptores a la misma tabla.
-Rapibase puede hacer mejor — pero requiere trabajo deliberado.
-
-### 2.1 Indexar canales por `(schema, table)` en el hub
-
-**Hoy**: `Hub.fanout` itera **todos** los shards y todos los canales,
-y cada canal evalúa si tiene streams matching para el evento. Es
-O(canales totales × suscriptores por canal) en el peor caso.
-
-**Mejora**: añadir un índice inverso `(schema, table) → []*Channel` en
-el hub. Cuando llega un evento, se consultan **solo** los canales que
-declararon interés en esa tabla. Es O(canales relevantes × suscriptores).
-
-Para una app con 100k canales activos pero 50 tablas distintas, esto
-es **2000× más rápido**. Es la optimización más impactante pendiente.
-
-Archivo: `hub/index.go` con una `sync.Map[tableKey][]*Channel` que se
-mantiene en sync con Attach/Detach.
+El índice por `(schema, table)` (2.1, hecho) cortó el bottleneck #1 —
+fan-out es ahora O(matches), no O(canales totales). Lo que sigue son
+optimizaciones incrementales sobre esa base.
 
 ### 2.2 Fan-out paralelo por shard
 
-`Hub.fanout` itera shards secuencialmente. Con 64 shards y 8 cores
-modernos, parallelizar por shard saca >5× throughput sin cambios al
-modelo conceptual:
+`Hub.fanout` itera shards secuencialmente. Con N shards y N cores,
+paralelizar saca >5× throughput:
 
 ```go
 func (h *Hub) fanout(ev wal.Event) {
@@ -122,28 +53,28 @@ func (h *Hub) fanout(ev wal.Event) {
 ```
 
 Cuidado: solo vale la pena cuando hay miles de canales. Para 10
-canales, el overhead de goroutines domina. Una heurística "si
-ChannelCount > 1000, paraleliza" es lo correcto.
+canales, el overhead de goroutines domina. Heurística: "si
+ChannelCount > 1000, paraleliza".
 
 ### 2.3 Pre-compilar el "fan-out plan" por evento
 
-Combinando 2.1 y 2.2: cuando un evento entra, el hub puede armar **una
-sola vez** la lista de `(Subscriber, Frame)` a entregar, en paralelo
-sobre los canales que aplican, y después hacer N `enqueue` no
-bloqueantes en serie. La projection y la permission check son CPU
-caras; hacerlas en una sola pasada con CPU paralelizada es óptimo.
+Combinando 2.1 (hecho) y 2.2: cuando un evento entra, el hub arma
+**una sola vez** la lista de `(Subscriber, Frame)` a entregar, en
+paralelo sobre los canales que aplican, y después hace N `enqueue`
+no bloqueantes en serie. La projection y la permission check son CPU
+caras; hacerlas en una pasada con CPU paralelizada es óptimo.
 
 ### 2.4 Buffer compartido para frames idénticos
 
 **Observación**: cuando 1000 suscriptores piden la misma tabla con
-columnas idénticas y el filter aplica para todos, el frame postgres_changes
-que reciben es **byte-idéntico**. Codificarlo 1000 veces es desperdicio.
+columnas idénticas y el filter aplica para todos, el frame
+postgres_changes que reciben es **byte-idéntico**. Codificarlo 1000
+veces es desperdicio.
 
-**Optimización**: el hub puede agrupar suscriptores por
+**Optimización**: el hub agrupa suscriptores por
 `(projection_columns_hash, role)`. Para cada grupo, codifica el frame
-**una vez**, y envía los bytes ya serializados a todos. Esto es lo que
-permite a Discord servir miles de millones de mensajes/día con clusters
-modestos.
+**una vez** y envía los bytes ya serializados a todos. Patrón de
+Discord para mil millones de mensajes/día con clusters modestos.
 
 Requiere extender `rawConn.WriteMessage` con una variante `WriteRaw`
 que toma bytes ya codificados, y un cache en `Channel` por
@@ -155,17 +86,18 @@ Hoy: queue lleno → drop hard, evict subscriber. Mejora:
 
 - **Drop selectivo** según importancia del frame: presence y broadcast
   efímeros caen primero, postgres_changes nunca (preservar resume).
-- **Coalesce**: si el queue tiene ya un frame de presence del mismo key,
-  el siguiente lo reemplaza en vez de añadirse.
-- **Warn antes de evict**: cuando queue > 75%, emitir `system code=behind`
-  para que el cliente baje el ritmo (deje de track-ear cursores, etc.).
+- **Coalesce**: si el queue tiene ya un frame de presence del mismo
+  key, el siguiente lo reemplaza en vez de añadirse.
+- **Warn antes de evict**: cuando queue > 75%, emitir
+  `system code=behind` para que el cliente baje el ritmo (deje de
+  trackear cursores, etc.).
 
 ### 2.6 LSN-based dedup en el cliente
 
-El protocolo ya emite LSN en cada frame; el SDK debe usarlo para
-deduplicar entre live + resume. Esto permite ser muy agresivo con
-retransmisiones del servidor (resume puede solapar con stream live sin
-problemas para el cliente).
+El protocolo ya emite LSN en cada frame y el SDK lo persiste para
+resume. Falta usarlo para **dedup explícito** entre live + resume:
+permite ser muy agresivo con retransmisiones del servidor (resume
+puede solapar con stream live sin problemas para el cliente).
 
 ### 2.7 Compaction de eventos en presence
 
@@ -177,29 +109,34 @@ presence sin perder UX real. Configurable por canal.
 ### 2.8 Sharded WAL consumers (futuro, multi-nodo)
 
 Para deployments enormes: en vez de un solo replicator por cluster,
-varios slots de replicación particionados por hash de tabla. Cada slot
-lo consume un nodo distinto. Postgres lo soporta nativamente.
+varios slots de replicación particionados por hash de tabla. Cada
+slot lo consume un nodo distinto. Postgres lo soporta nativamente.
 
 Requiere coordinador adicional para asignar particiones; no urgente
 hasta que un solo nodo se sature (>500k events/s).
 
-### Estimaciones de targets
+### Estimaciones de targets actuales
 
-Con 1.1-1.4 implementados, un solo nodo (8 cores, 32GB):
-- **Conexiones concurrentes**: 200k-500k WebSockets activos.
-- **Eventos/s fan-out**: 1M+ (1000 eventos/s × 1000 suscriptores promedio).
-- **Latencia p50**: <5ms WAL→cliente, p99 <20ms.
+Estado actual (un solo nodo, 8 cores, 32 GB):
+- **Conexiones concurrentes**: estimado 50k-100k (limitado por
+  serialización del fan-out, mejora con 2.2-2.4).
+- **Latencia p50**: <5 ms WAL→cliente medido empíricamente con el
+  test de VPS.
 
-Para comparar: Supabase Realtime publica oficialmente 10k connections/nodo
-sostenidos.
+Con 2.2-2.4 implementados, target realista:
+- **Conexiones**: 200k-500k.
+- **Eventos/s**: 1M+.
+
+Para comparar: Supabase Realtime publica oficialmente 10k
+connections/nodo sostenidos.
 
 ---
 
 ## 3. Diferenciador: realtime como sustrato para IA
 
-Esta sección es estratégica. Los BaaS actuales se diseñaron antes del
-boom de agentes y LLM tool use; tienen realtime "para chats". Rapibase
-puede posicionarse como el realtime *nativo* para apps AI-first.
+Sección estratégica. Los BaaS actuales se diseñaron antes del boom de
+agentes y LLM tool use; tienen realtime "para chats". Rapibase puede
+posicionarse como el realtime *nativo* para apps AI-first.
 
 ### 3.1 Streaming de tool calls vía RPC
 
@@ -246,7 +183,7 @@ Si rapibase guarda estos meta-eventos en una tabla `realtime_llm_calls`
 y el WAL los propaga, los devs obtienen **observabilidad gratis** de
 todas las invocaciones de modelo en su app sin instrumentar nada.
 
-Es análogo a Langfuse/Helicone pero **dentro del mismo BaaS**, sin un
+Análogo a Langfuse/Helicone pero **dentro del mismo BaaS**, sin un
 segundo servicio. Diferencial fuerte para devs AI-first.
 
 ### 3.4 Subscriptions con filtros semánticos
@@ -263,8 +200,8 @@ pgvector o a un sidecar de embeddings. El cliente declara intent,
 el server filtra en runtime.
 
 Ejemplo: un agente de soporte se suscribe a "tickets cuyo embedding
-es similar a 'problemas de billing'" — no a una tabla entera. El fan-out
-es 10× más selectivo y la app es más simple.
+es similar a 'problemas de billing'" — no a una tabla entera. El
+fan-out es 10× más selectivo y la app es más simple.
 
 ### 3.5 Multi-agent broadcast con typing/cursor coordination
 
@@ -280,7 +217,7 @@ documentado y ejemplificado en el SDK abre un caso de uso enorme.
 
 ### 3.6 RPC como herramienta MCP
 
-Rapibase ya tiene MCP server (`internal/mcp/`). Una integración natural:
+Rapibase ya tiene MCP server (`internal/mcp/`). Integración natural:
 
 - Cada `rpc.Definition` registrada en rapibase es automáticamente
   expuesta como una herramienta MCP.
@@ -299,8 +236,8 @@ Combinar lo que ya hay:
 - Evento de DB → WAL → realtime (existe).
 - Mismo evento → webhook a tu agente (existe en `internal/webhooks/`).
 - Webhook responde con frames a inyectar en el canal del usuario
-  afectado vía `Hub.PublishLocal` o `Hub.Broadcast` (un endpoint
-  REST nuevo).
+  afectado vía `Hub.PublishLocal` o `Hub.Broadcast` (un endpoint REST
+  nuevo).
 
 Resultado: un usuario inserta una fila → tu agente la procesa → el
 usuario ve la respuesta del agente en realtime, todo sin cableado
@@ -309,42 +246,42 @@ respuesta".
 
 ---
 
-## 4. Resumen ejecutivo: qué nos diferencia
+## 4. Diferenciales — estado vs. competencia
 
-| Capacidad | Supabase | Firebase | Appwrite | Rapibase (objetivo) |
+| Capacidad | Supabase | Firebase | Appwrite | Rapibase |
 |---|---|---|---|---|
-| WS único para DB+broadcast+presence+RPC | Parcial | No | No | **Sí** |
-| Codec binario (msgpack) | No | No | No | **Sí (default)** |
-| Resume con LSN garantizado | Parcial | No | No | **Sí, doc primer-class** |
-| Streaming RPC | No | No | No | **Sí (planeado §3.1)** |
-| Shared state CRDT | No | No | No | **Sí (planeado §3.2)** |
-| Observabilidad LLM built-in | No | No | No | **Sí (planeado §3.3)** |
-| Filtros semánticos | No | No | No | **Sí (planeado §3.4)** |
-| RPCs auto-expuestos como MCP tools | No | No | No | **Sí (planeado §3.6)** |
-| Single binary (operacional) | No (4+ servicios) | N/A | No (~5 servicios) | **Sí** |
-| Conexiones/nodo sostenibles | ~10k | N/A | ~5k | **Target 200k+ (§2)** |
+| WS único para DB+broadcast+presence+RPC | Parcial | No | No | **✅ hecho** |
+| Codec binario (msgpack) | No | No | No | **✅ hecho (default)** |
+| Resume con LSN garantizado | Parcial | No | No | **✅ hecho** |
+| Single binary operacional | No (4+ servicios) | N/A | No (~5 servicios) | **✅ hecho** |
+| Rate limiting per conexión + per función | Limitado | N/A | Limitado | **✅ hecho** |
+| Métricas Prometheus integradas | No | No | No | **✅ hecho** |
+| Índice (schema, table) en fan-out | No | N/A | No | **✅ hecho** |
+| Streaming RPC | No | No | No | Pendiente (§3.1) |
+| Shared state CRDT | No | No | No | Pendiente (§3.2) |
+| Observabilidad LLM built-in | No | No | No | Pendiente (§3.3) |
+| Filtros semánticos (embeddings) | No | No | No | Pendiente (§3.4) |
+| RPCs auto-expuestos como MCP tools | No | No | No | Pendiente (§3.6) |
+| Conexiones/nodo sostenibles | ~10k | N/A | ~5k | actual ~50-100k, target 200k+ (§2.2-2.4) |
 
-Esa columna derecha es la tesis del producto: **el realtime de un BaaS
+Columna derecha = la tesis del producto: **el realtime de un BaaS
 diseñado en 2026, para apps que son híbridas humano-agente**.
 
 ---
 
-## 5. Orden recomendado de ejecución
+## 5. Orden sugerido de ejecución pendiente
 
-1. **SDK TS** (1.1) — desbloquea consumir realtime desde el propio
-   dashboard de rapibase y desde apps de devs early adopters.
-2. **Métricas conectadas** (1.4) — operacionalmente crítico, barato.
-3. **Index por tabla** (2.1) — la optimización con mayor ratio
-   impacto/esfuerzo.
-4. **Integration tests WAL** (1.2) — antes del primer deploy real.
-5. **Rate limiting** (1.5) — protección antes de exponer públicamente.
-6. **RPC streaming** (3.1) — primer diferenciador AI real, base para 3.2-3.6.
-7. **RPCs como MCP tools** (3.6) — combina lo que ya tienes, ganancia
-   enorme en posicionamiento.
-8. **Shared state CRDT** (3.2) — habilita la categoría completa de
+1. **RPCs como MCP tools** (3.6) — combina lo que ya hay (MCP +
+   rpc.Registry), ganancia enorme en posicionamiento, ~1-2 días.
+2. **Streaming RPC** (3.1) — primer diferenciador AI real, base para
+   3.2-3.5.
+3. **Shared state CRDT** (3.2) — habilita la categoría completa de
    apps colaborativas humano-agente.
-9. Resto en paralelo según necesidades reales de usuarios.
+4. **Backpressure adaptativo** (2.5) — el más impactante de las
+   optimizaciones que aún quedan, mejor UX bajo carga.
+5. **Fan-out paralelo + frames compartidos** (2.2 + 2.4) — el push
+   final hacia 200k+ conexiones por nodo.
+6. **bus/NATS** (1.1) — solo cuando un nodo se sature.
+7. Resto en paralelo según necesidades reales de usuarios.
 
-Cada punto del 1.x se puede entregar en días; los del 3.x son
-proyectos de 1-2 semanas cada uno. El conjunto es ambicioso pero
-ningún ítem individual lo es.
+Lo de 3.x son proyectos de 1-2 semanas cada uno; lo de 2.x son días.

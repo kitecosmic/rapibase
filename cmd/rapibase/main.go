@@ -43,11 +43,18 @@ func main() {
 		log.Printf("Warning: Could not create admin user: %v", err)
 	}
 
-	// Initialize Fiber app
+	// Initialize Fiber app.
+	//
+	// BodyLimit is intentionally large (5 GiB) to support bulk data imports
+	// (CSV/JSON/SQL). StreamRequestBody avoids buffering the whole request
+	// body in memory before invoking the handler: multipart files are
+	// streamed directly into the import pipeline, which then streams them
+	// into Postgres via COPY FROM STDIN (CSV) or chunked batches (JSON).
 	app := fiber.New(fiber.Config{
-		AppName:      "RapiBase",
-		BodyLimit:    50 * 1024 * 1024, // 50MB for imports
-		ErrorHandler: api.ErrorHandler,
+		AppName:           "RapiBase",
+		BodyLimit:         5 * 1024 * 1024 * 1024,
+		StreamRequestBody: true,
+		ErrorHandler:      api.ErrorHandler,
 	})
 
 	// Middleware

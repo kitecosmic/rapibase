@@ -3,12 +3,57 @@ package handlers
 import (
 	"bytes"
 	"fmt"
+	"io"
+	"mime"
+	"mime/multipart"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/rapibase/rapibase/internal/database"
 	"github.com/rapibase/rapibase/internal/models"
 )
+
+// streamUploadedFile finds the multipart "file" part in the request body and
+// returns it as an io.Reader streaming from the network. It avoids the
+// default Fiber/fasthttp path that spills the entire multipart payload to a
+// temp file on disk before the handler can see it, which is critical for
+// multi-GB imports (CDR-style CSVs).
+//
+// If the request is not multipart, returns ok=false so the caller can fall
+// back to reading the raw body (used by curl-style JSON/SQL posts).
+func streamUploadedFile(c *fiber.Ctx) (io.Reader, func(), bool, error) {
+	ct := c.Get("Content-Type")
+	mediaType, params, err := mime.ParseMediaType(ct)
+	if err != nil || !strings.HasPrefix(mediaType, "multipart/") {
+		return nil, func() {}, false, nil
+	}
+	boundary := params["boundary"]
+	if boundary == "" {
+		return nil, func() {}, false, fmt.Errorf("missing multipart boundary")
+	}
+
+	body := c.Request().BodyStream()
+	if body == nil {
+		// StreamRequestBody disabled or body already consumed — fall back
+		// to FormFile so we don't break non-streaming setups.
+		return nil, func() {}, false, nil
+	}
+
+	mr := multipart.NewReader(body, boundary)
+	for {
+		part, err := mr.NextPart()
+		if err == io.EOF {
+			return nil, func() {}, false, fmt.Errorf("no file part in multipart upload")
+		}
+		if err != nil {
+			return nil, func() {}, false, fmt.Errorf("multipart parse error: %w", err)
+		}
+		if part.FormName() == "file" {
+			return part, func() { _ = part.Close() }, true, nil
+		}
+		_ = part.Close()
+	}
+}
 
 type QueryHandler struct {
 	db *database.DB
@@ -53,10 +98,11 @@ func (h *QueryHandler) ExecuteQuery(c *fiber.Ctx) error {
 
 // ImportSQL imports data from SQL
 func (h *QueryHandler) ImportSQL(c *fiber.Ctx) error {
-	// Get file from form
-	file, err := c.FormFile("file")
+	reader, cleanup, ok, err := streamUploadedFile(c)
 	if err != nil {
-		// Try to get SQL from body
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+	}
+	if !ok {
 		var req struct {
 			SQL string `json:"sql"`
 		}
@@ -65,41 +111,19 @@ func (h *QueryHandler) ImportSQL(c *fiber.Ctx) error {
 				"error": "SQL file or content is required",
 			})
 		}
-
-		reader := strings.NewReader(req.SQL)
-		affected, err := h.db.ImportSQL(c.Context(), reader)
+		affected, err := h.db.ImportSQL(c.Context(), strings.NewReader(req.SQL))
 		if err != nil {
-			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-				"error": err.Error(),
-			})
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 		}
-
-		return c.JSON(fiber.Map{
-			"message":       "Import completed",
-			"rows_affected": affected,
-		})
+		return c.JSON(fiber.Map{"message": "Import completed", "rows_affected": affected})
 	}
+	defer cleanup()
 
-	// Open file
-	f, err := file.Open()
+	affected, err := h.db.ImportSQL(c.Context(), reader)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": "Failed to open file",
-		})
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}
-	defer f.Close()
-
-	affected, err := h.db.ImportSQL(c.Context(), f)
-	if err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": err.Error(),
-		})
-	}
-
-	return c.JSON(fiber.Map{
-		"message":       "Import completed",
-		"rows_affected": affected,
-	})
+	return c.JSON(fiber.Map{"message": "Import completed", "rows_affected": affected})
 }
 
 // ImportJSON imports data from JSON with auto-column creation
@@ -113,48 +137,23 @@ func (h *QueryHandler) ImportJSON(c *fiber.Ctx) error {
 			"error": "Table name is required",
 		})
 	}
-
-	// Check if auto-create columns is enabled (default: true)
 	autoCreate := c.Query("auto_create", "true") == "true"
 
-	// Get file from form
-	file, err := c.FormFile("file")
+	reader, cleanup, ok, err := streamUploadedFile(c)
 	if err != nil {
-		// Try to get JSON from body
-		reader := bytes.NewReader(c.Body())
-		affected, err := h.db.ImportJSON(c.Context(), tableName, reader, autoCreate)
-		if err != nil {
-			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-				"error": err.Error(),
-			})
-		}
-
-		return c.JSON(fiber.Map{
-			"message":       "Import completed",
-			"rows_affected": affected,
-		})
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}
+	if !ok {
+		reader = bytes.NewReader(c.Body())
+		cleanup = func() {}
+	}
+	defer cleanup()
 
-	// Open file
-	f, err := file.Open()
+	affected, err := h.db.ImportJSON(c.Context(), tableName, reader, autoCreate)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": "Failed to open file",
-		})
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}
-	defer f.Close()
-
-	affected, err := h.db.ImportJSON(c.Context(), tableName, f, autoCreate)
-	if err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": err.Error(),
-		})
-	}
-
-	return c.JSON(fiber.Map{
-		"message":       "Import completed",
-		"rows_affected": affected,
-	})
+	return c.JSON(fiber.Map{"message": "Import completed", "rows_affected": affected})
 }
 
 // ImportCSV imports data from CSV with auto-column creation
@@ -168,38 +167,22 @@ func (h *QueryHandler) ImportCSV(c *fiber.Ctx) error {
 			"error": "Table name is required",
 		})
 	}
-
-	// Check if auto-create columns is enabled (default: true)
 	autoCreate := c.Query("auto_create", "true") == "true"
 
-	// Get file from form
-	file, err := c.FormFile("file")
+	reader, cleanup, ok, err := streamUploadedFile(c)
 	if err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": "CSV file is required",
-		})
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}
+	if !ok {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "CSV file is required (multipart upload)"})
+	}
+	defer cleanup()
 
-	// Open file
-	f, err := file.Open()
+	affected, err := h.db.ImportCSV(c.Context(), tableName, reader, autoCreate)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": "Failed to open file",
-		})
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 	}
-	defer f.Close()
-
-	affected, err := h.db.ImportCSV(c.Context(), tableName, f, autoCreate)
-	if err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": err.Error(),
-		})
-	}
-
-	return c.JSON(fiber.Map{
-		"message":       "Import completed",
-		"rows_affected": affected,
-	})
+	return c.JSON(fiber.Map{"message": "Import completed", "rows_affected": affected})
 }
 
 // ExportTable exports a table

@@ -2,9 +2,11 @@ package database
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -12,6 +14,11 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/rapibase/rapibase/internal/models"
 )
+
+// jsonBatchSize controls how many rows are flushed per INSERT batch when
+// stream-decoding a JSON array. Larger batches improve throughput; smaller
+// batches bound memory. 1000 is a healthy balance for TEXT-only rows.
+const jsonBatchSize = 1000
 
 // ImportSQL imports data from SQL statements
 func (db *DB) ImportSQL(ctx context.Context, reader io.Reader) (int64, error) {
@@ -62,63 +69,122 @@ func (db *DB) ImportSQL(ctx context.Context, reader io.Reader) (int64, error) {
 	return totalAffected, nil
 }
 
-// ImportJSON imports data from JSON into a table with auto-column creation
+// ImportJSON stream-decodes a JSON array of objects and inserts them in
+// chunked batches of jsonBatchSize rows. Memory stays bounded by the chunk
+// size, not the input length, so multi-GB JSON files import without OOM.
+//
+// When autoCreateColumns is true, the destination table is created lazily
+// from the first chunk's keys and any later chunk that introduces a new key
+// triggers an ALTER TABLE ADD COLUMN before that chunk is inserted.
 func (db *DB) ImportJSON(ctx context.Context, tableName string, reader io.Reader, autoCreateColumns bool) (int64, error) {
 	if !isValidIdentifier(tableName) {
 		return 0, fmt.Errorf("invalid table name")
 	}
 
-	// Decode JSON
-	var data []map[string]interface{}
-	decoder := json.NewDecoder(reader)
-	if err := decoder.Decode(&data); err != nil {
+	dec := json.NewDecoder(reader)
+	dec.UseNumber()
+
+	tok, err := dec.Token()
+	if err != nil {
 		return 0, fmt.Errorf("invalid JSON: %w", err)
 	}
-
-	if len(data) == 0 {
-		return 0, nil
+	if d, ok := tok.(json.Delim); !ok || d != '[' {
+		return 0, fmt.Errorf("expected JSON array at top level, got %v", tok)
 	}
 
-	// Collect all unique column names from all rows
-	allColumns := make(map[string]bool)
-	for _, row := range data {
+	knownColumns, tableExists, err := db.loadColumnSet(ctx, tableName)
+	if err != nil {
+		return 0, err
+	}
+	if !autoCreateColumns && !tableExists {
+		return 0, fmt.Errorf("table %q does not exist (enable auto_create to create it)", tableName)
+	}
+
+	var (
+		totalAffected int64
+		buf           = make([]map[string]interface{}, 0, jsonBatchSize)
+	)
+
+	flush := func() error {
+		if len(buf) == 0 {
+			return nil
+		}
+		n, err := db.insertJSONBatch(ctx, tableName, buf, knownColumns, &tableExists, autoCreateColumns)
+		totalAffected += n
+		buf = buf[:0]
+		return err
+	}
+
+	for dec.More() {
+		var row map[string]interface{}
+		if err := dec.Decode(&row); err != nil {
+			_ = flush()
+			return totalAffected, fmt.Errorf("invalid JSON row at offset %d: %w", dec.InputOffset(), err)
+		}
+		buf = append(buf, row)
+		if len(buf) >= jsonBatchSize {
+			if err := flush(); err != nil {
+				return totalAffected, err
+			}
+		}
+	}
+	if err := flush(); err != nil {
+		return totalAffected, err
+	}
+
+	if _, err := dec.Token(); err != nil && !errors.Is(err, io.EOF) {
+		return totalAffected, fmt.Errorf("malformed JSON: %w", err)
+	}
+	return totalAffected, nil
+}
+
+// loadColumnSet returns the lowercased column names of a table and whether
+// the table currently exists. Used by the JSON import to bootstrap its
+// known-columns set.
+func (db *DB) loadColumnSet(ctx context.Context, tableName string) (map[string]bool, bool, error) {
+	existing := make(map[string]bool)
+	schema, err := db.GetTableSchema(ctx, tableName)
+	if err != nil {
+		if strings.Contains(err.Error(), "table not found") {
+			return existing, false, nil
+		}
+		return nil, false, fmt.Errorf("failed to get table schema: %w", err)
+	}
+	for _, col := range schema.Columns {
+		existing[strings.ToLower(col.Name)] = true
+	}
+	return existing, true, nil
+}
+
+// insertJSONBatch creates/extends the table for any new columns observed in
+// the chunk (when autoCreate is on) and inserts the chunk via pgx.Batch.
+// knownColumns and tableExists are mutated in place so subsequent chunks
+// reuse the schema discovery from earlier ones.
+func (db *DB) insertJSONBatch(
+	ctx context.Context,
+	tableName string,
+	rows []map[string]interface{},
+	knownColumns map[string]bool,
+	tableExists *bool,
+	autoCreate bool,
+) (int64, error) {
+	chunkCols := make(map[string]bool)
+	for _, row := range rows {
 		for col := range row {
 			normalized := normalizeColumnName(col)
 			if !isValidIdentifier(normalized) {
 				return 0, fmt.Errorf("invalid column name: %s", col)
 			}
-			allColumns[normalized] = true
+			chunkCols[normalized] = true
 		}
 	}
 
-	// Check if table exists and get existing columns
-	existingColumns := make(map[string]bool)
-	tableExists := true
-	schema, err := db.GetTableSchema(ctx, tableName)
-	if err != nil {
-		if strings.Contains(err.Error(), "table not found") {
-			tableExists = false
-		} else {
-			return 0, fmt.Errorf("failed to get table schema: %w", err)
-		}
-	} else {
-		for _, col := range schema.Columns {
-			existingColumns[strings.ToLower(col.Name)] = true
-		}
-	}
-
-	// Auto-create columns if enabled
-	if autoCreateColumns {
-		if !tableExists {
-			// Create table with id column and all JSON columns
+	if autoCreate {
+		if !*tableExists {
 			columns := []models.CreateColumnSpec{
-				{
-					Name:         "id",
-					Type:         "SERIAL",
-					IsPrimaryKey: true,
-				},
+				{Name: "id", Type: "SERIAL", IsPrimaryKey: true},
 			}
-			for col := range allColumns {
+			for col := range chunkCols {
 				if strings.ToLower(col) != "id" {
 					columns = append(columns, models.CreateColumnSpec{
 						Name:     col,
@@ -127,83 +193,71 @@ func (db *DB) ImportJSON(ctx context.Context, tableName string, reader io.Reader
 					})
 				}
 			}
-			err = db.CreateTable(ctx, models.CreateTableRequest{
-				Name:    tableName,
-				Columns: columns,
-			})
-			if err != nil {
+			if err := db.CreateTable(ctx, models.CreateTableRequest{Name: tableName, Columns: columns}); err != nil {
 				return 0, fmt.Errorf("failed to create table: %w", err)
 			}
+			for col := range chunkCols {
+				knownColumns[strings.ToLower(col)] = true
+			}
+			knownColumns["id"] = true
+			*tableExists = true
 		} else {
-			// Add missing columns to existing table
-			for col := range allColumns {
-				if !existingColumns[strings.ToLower(col)] {
-					query := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s TEXT",
-						quoteIdentifier(tableName),
-						quoteIdentifier(col))
-					_, err := db.Pool.Exec(ctx, query)
-					if err != nil {
-						return 0, fmt.Errorf("failed to add column %s: %w", col, err)
-					}
+			for col := range chunkCols {
+				if knownColumns[strings.ToLower(col)] {
+					continue
 				}
+				query := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s TEXT",
+					quoteIdentifier(tableName), quoteIdentifier(col))
+				if _, err := db.Pool.Exec(ctx, query); err != nil {
+					return 0, fmt.Errorf("failed to add column %s: %w", col, err)
+				}
+				knownColumns[strings.ToLower(col)] = true
 			}
 		}
 	}
 
-	// Use batch insert for performance
 	batch := &pgx.Batch{}
-
-	for _, row := range data {
+	for _, row := range rows {
 		var columns []string
 		var placeholders []string
 		var values []interface{}
 		i := 1
-
 		for col, val := range row {
 			normalizedCol := normalizeColumnName(col)
-			// Skip id column if it's nil or empty (let DB auto-generate)
 			if strings.ToLower(normalizedCol) == "id" && (val == nil || val == "") {
 				continue
 			}
 			columns = append(columns, quoteIdentifier(normalizedCol))
 			placeholders = append(placeholders, fmt.Sprintf("$%d", i))
-			// Convert value to string for TEXT columns
 			values = append(values, convertToString(val))
 			i++
 		}
-
 		if len(columns) == 0 {
 			continue
 		}
-
-		query := fmt.Sprintf(
-			"INSERT INTO %s (%s) VALUES (%s)",
+		query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)",
 			quoteIdentifier(tableName),
 			strings.Join(columns, ", "),
 			strings.Join(placeholders, ", "),
 		)
-
 		batch.Queue(query, values...)
 	}
-
 	if batch.Len() == 0 {
 		return 0, nil
 	}
 
-	// Execute batch
 	results := db.Pool.SendBatch(ctx, batch)
 	defer results.Close()
 
-	var totalAffected int64
+	var affected int64
 	for i := 0; i < batch.Len(); i++ {
-		result, err := results.Exec()
+		tag, err := results.Exec()
 		if err != nil {
-			return totalAffected, fmt.Errorf("batch insert error at row %d: %w", i, err)
+			return affected, fmt.Errorf("batch insert error at row %d: %w", i, err)
 		}
-		totalAffected += result.RowsAffected()
+		affected += tag.RowsAffected()
 	}
-
-	return totalAffected, nil
+	return affected, nil
 }
 
 // ExportTableJSON exports a table to JSON
@@ -319,26 +373,46 @@ func truncate(s string, maxLen int) string {
 	return s[:maxLen] + "..."
 }
 
-// ImportCSV imports data from CSV into a table with auto-column creation
+// ImportCSV imports a CSV file into a table using PostgreSQL's COPY FROM STDIN
+// with the request body streamed directly into the protocol. Memory use stays
+// constant regardless of input size, so multi-GB CDR-style files import in a
+// single pass.
+//
+// Header handling: the first line is consumed for column names; auto-create
+// adds the table (with a SERIAL `id`) or any missing columns as TEXT before
+// the bulk copy begins. If the CSV itself contains an `id` column we honor it
+// verbatim — callers wanting auto-generated keys must omit that header.
 func (db *DB) ImportCSV(ctx context.Context, tableName string, reader io.Reader, autoCreateColumns bool) (int64, error) {
 	if !isValidIdentifier(tableName) {
 		return 0, fmt.Errorf("invalid table name")
 	}
 
-	csvReader := csv.NewReader(reader)
-	csvReader.TrimLeadingSpace = true
+	br := bufio.NewReaderSize(reader, 64*1024)
 
-	// Read header row
-	headers, err := csvReader.Read()
-	if err != nil {
-		return 0, fmt.Errorf("failed to read CSV headers: %w", err)
+	// Strip optional UTF-8 BOM so Excel-exported CSVs work transparently.
+	if b, _ := br.Peek(3); bytes.Equal(b, []byte{0xEF, 0xBB, 0xBF}) {
+		_, _ = br.Discard(3)
 	}
 
+	headerLine, err := br.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return 0, fmt.Errorf("failed to read CSV header: %w", err)
+	}
+	headerLine = strings.TrimRight(headerLine, "\r\n")
+	if headerLine == "" {
+		return 0, fmt.Errorf("CSV file is empty")
+	}
+
+	hdrReader := csv.NewReader(strings.NewReader(headerLine))
+	hdrReader.TrimLeadingSpace = true
+	headers, err := hdrReader.Read()
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse CSV header: %w", err)
+	}
 	if len(headers) == 0 {
 		return 0, fmt.Errorf("CSV file has no columns")
 	}
 
-	// Normalize and validate headers
 	normalizedHeaders := make([]string, len(headers))
 	for i, h := range headers {
 		normalized := normalizeColumnName(h)
@@ -348,7 +422,39 @@ func (db *DB) ImportCSV(ctx context.Context, tableName string, reader io.Reader,
 		normalizedHeaders[i] = normalized
 	}
 
-	// Check if table exists and get existing columns
+	if err := db.ensureTableForHeaders(ctx, tableName, normalizedHeaders, autoCreateColumns); err != nil {
+		return 0, err
+	}
+
+	quoted := make([]string, len(normalizedHeaders))
+	for i, h := range normalizedHeaders {
+		quoted[i] = quoteIdentifier(h)
+	}
+
+	conn, err := db.Pool.Acquire(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("failed to acquire connection: %w", err)
+	}
+	defer conn.Release()
+
+	copySQL := fmt.Sprintf(
+		`COPY %s (%s) FROM STDIN WITH (FORMAT csv, HEADER false, NULL '')`,
+		quoteIdentifier(tableName),
+		strings.Join(quoted, ", "),
+	)
+
+	tag, err := conn.Conn().PgConn().CopyFrom(ctx, br, copySQL)
+	if err != nil {
+		return tag.RowsAffected(), fmt.Errorf("COPY failed: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
+// ensureTableForHeaders creates the destination table (with a SERIAL id and
+// the given headers as TEXT) when missing, or adds any header that is not yet
+// a column. With autoCreateColumns=false it just verifies the table exists
+// and returns the schema check error otherwise.
+func (db *DB) ensureTableForHeaders(ctx context.Context, tableName string, headers []string, autoCreate bool) error {
 	existingColumns := make(map[string]bool)
 	tableExists := true
 	schema, err := db.GetTableSchema(ctx, tableName)
@@ -356,7 +462,7 @@ func (db *DB) ImportCSV(ctx context.Context, tableName string, reader io.Reader,
 		if strings.Contains(err.Error(), "table not found") {
 			tableExists = false
 		} else {
-			return 0, fmt.Errorf("failed to get table schema: %w", err)
+			return fmt.Errorf("failed to get table schema: %w", err)
 		}
 	} else {
 		for _, col := range schema.Columns {
@@ -364,127 +470,43 @@ func (db *DB) ImportCSV(ctx context.Context, tableName string, reader io.Reader,
 		}
 	}
 
-	// Auto-create columns if enabled
-	if autoCreateColumns {
+	if !autoCreate {
 		if !tableExists {
-			// Create table with id column and all CSV columns
-			columns := []models.CreateColumnSpec{
-				{
-					Name:         "id",
-					Type:         "SERIAL",
-					IsPrimaryKey: true,
-				},
-			}
-			for _, h := range normalizedHeaders {
-				if strings.ToLower(h) != "id" {
-					columns = append(columns, models.CreateColumnSpec{
-						Name:     h,
-						Type:     "TEXT",
-						Nullable: true,
-					})
-				}
-			}
-			err = db.CreateTable(ctx, models.CreateTableRequest{
-				Name:    tableName,
-				Columns: columns,
-			})
-			if err != nil {
-				return 0, fmt.Errorf("failed to create table: %w", err)
-			}
-		} else {
-			// Add missing columns to existing table
-			for _, h := range normalizedHeaders {
-				if !existingColumns[strings.ToLower(h)] {
-					query := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s TEXT",
-						quoteIdentifier(tableName),
-						quoteIdentifier(h))
-					_, err := db.Pool.Exec(ctx, query)
-					if err != nil {
-						return 0, fmt.Errorf("failed to add column %s: %w", h, err)
-					}
-				}
-			}
+			return fmt.Errorf("table %q does not exist (enable auto_create to create it)", tableName)
 		}
+		return nil
 	}
 
-	// Read all rows
-	var rows [][]string
-	for {
-		record, err := csvReader.Read()
-		if err == io.EOF {
-			break
+	if !tableExists {
+		columns := []models.CreateColumnSpec{
+			{Name: "id", Type: "SERIAL", IsPrimaryKey: true},
 		}
-		if err != nil {
-			return 0, fmt.Errorf("failed to read CSV row: %w", err)
+		for _, h := range headers {
+			if strings.ToLower(h) != "id" {
+				columns = append(columns, models.CreateColumnSpec{
+					Name:     h,
+					Type:     "TEXT",
+					Nullable: true,
+				})
+			}
 		}
-		rows = append(rows, record)
+		if err := db.CreateTable(ctx, models.CreateTableRequest{Name: tableName, Columns: columns}); err != nil {
+			return fmt.Errorf("failed to create table: %w", err)
+		}
+		return nil
 	}
 
-	if len(rows) == 0 {
-		return 0, nil
-	}
-
-	// Use batch insert for performance
-	batch := &pgx.Batch{}
-
-	for _, row := range rows {
-		var columns []string
-		var placeholders []string
-		var values []interface{}
-		idx := 1
-
-		for i, val := range row {
-			if i >= len(normalizedHeaders) {
-				break
-			}
-			colName := normalizedHeaders[i]
-			// Skip id column if it's empty (let DB auto-generate)
-			if strings.ToLower(colName) == "id" && val == "" {
-				continue
-			}
-			columns = append(columns, quoteIdentifier(colName))
-			placeholders = append(placeholders, fmt.Sprintf("$%d", idx))
-			// Handle empty strings as NULL for non-text columns
-			if val == "" {
-				values = append(values, nil)
-			} else {
-				values = append(values, val)
-			}
-			idx++
-		}
-
-		if len(columns) == 0 {
+	for _, h := range headers {
+		if existingColumns[strings.ToLower(h)] {
 			continue
 		}
-
-		query := fmt.Sprintf(
-			"INSERT INTO %s (%s) VALUES (%s)",
-			quoteIdentifier(tableName),
-			strings.Join(columns, ", "),
-			strings.Join(placeholders, ", "),
-		)
-
-		batch.Queue(query, values...)
-	}
-
-	if batch.Len() == 0 {
-		return 0, nil
-	}
-
-	// Execute batch
-	results := db.Pool.SendBatch(ctx, batch)
-	defer results.Close()
-
-	var totalAffected int64
-	for i := 0; i < batch.Len(); i++ {
-		result, err := results.Exec()
-		if err != nil {
-			return totalAffected, fmt.Errorf("batch insert error at row %d: %w", i, err)
+		query := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s TEXT",
+			quoteIdentifier(tableName), quoteIdentifier(h))
+		if _, err := db.Pool.Exec(ctx, query); err != nil {
+			return fmt.Errorf("failed to add column %s: %w", h, err)
 		}
-		totalAffected += result.RowsAffected()
 	}
-
-	return totalAffected, nil
+	return nil
 }
 
 // convertToString converts any value to a string for TEXT columns
@@ -495,6 +517,8 @@ func convertToString(val interface{}) interface{} {
 	switch v := val.(type) {
 	case string:
 		return v
+	case json.Number:
+		return v.String()
 	case float64:
 		// Check if it's a whole number
 		if v == float64(int64(v)) {
