@@ -378,10 +378,16 @@ func truncate(s string, maxLen int) string {
 // constant regardless of input size, so multi-GB CDR-style files import in a
 // single pass.
 //
-// Header handling: the first line is consumed for column names; auto-create
-// adds the table (with a SERIAL `id`) or any missing columns as TEXT before
-// the bulk copy begins. If the CSV itself contains an `id` column we honor it
-// verbatim — callers wanting auto-generated keys must omit that header.
+// id-column handling: when the CSV declares an `id` column, we sniff the
+// first data row to pick a mode:
+//   - id cell empty  → "auto-gen mode": drop the id column from COPY's column
+//     list and re-stream the file through csv.Reader/Writer in a goroutine,
+//     filtering the id cell out of every row. Postgres then assigns ids from
+//     the SERIAL sequence. This preserves the old convenience for legacy
+//     exports that left the id column blank.
+//   - id cell filled → "explicit mode": include id in COPY's column list and
+//     stream the body verbatim. Faster, no re-stream cost.
+//   - no id column   → fast path: stream verbatim.
 func (db *DB) ImportCSV(ctx context.Context, tableName string, reader io.Reader, autoCreateColumns bool) (int64, error) {
 	if !isValidIdentifier(tableName) {
 		return 0, fmt.Errorf("invalid table name")
@@ -422,12 +428,51 @@ func (db *DB) ImportCSV(ctx context.Context, tableName string, reader io.Reader,
 		normalizedHeaders[i] = normalized
 	}
 
+	// Create the table (and any missing columns) up-front using ALL headers
+	// — including id, if present — so the destination matches the source.
 	if err := db.ensureTableForHeaders(ctx, tableName, normalizedHeaders, autoCreateColumns); err != nil {
 		return 0, err
 	}
 
-	quoted := make([]string, len(normalizedHeaders))
-	for i, h := range normalizedHeaders {
+	// Decide id mode by sniffing the first data row.
+	idIdx := indexOfFold(normalizedHeaders, "id")
+	copyHeaders := normalizedHeaders
+	var copyReader io.Reader = br
+	cleanup := func() {}
+
+	if idIdx >= 0 {
+		firstDataLine, err := br.ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return 0, fmt.Errorf("failed to read first data row: %w", err)
+		}
+		firstDataLine = strings.TrimRight(firstDataLine, "\r\n")
+		if firstDataLine == "" {
+			// Header-only file: nothing to copy, schema already ensured.
+			return 0, nil
+		}
+
+		firstRecord, err := csv.NewReader(strings.NewReader(firstDataLine)).Read()
+		if err != nil {
+			return 0, fmt.Errorf("failed to parse first data row: %w", err)
+		}
+
+		idEmpty := idIdx < len(firstRecord) && strings.TrimSpace(firstRecord[idIdx]) == ""
+		if idEmpty {
+			copyHeaders = sliceDropAt(normalizedHeaders, idIdx)
+			pr, pw := io.Pipe()
+			go restreamWithoutColumn(pw, firstRecord, br, idIdx)
+			copyReader = pr
+			cleanup = func() { _ = pr.Close() }
+		} else {
+			// id is populated — put the sniffed line back in front of the
+			// remaining stream and let COPY ingest it verbatim.
+			copyReader = io.MultiReader(strings.NewReader(firstDataLine+"\n"), br)
+		}
+	}
+	defer cleanup()
+
+	quoted := make([]string, len(copyHeaders))
+	for i, h := range copyHeaders {
 		quoted[i] = quoteIdentifier(h)
 	}
 
@@ -443,11 +488,73 @@ func (db *DB) ImportCSV(ctx context.Context, tableName string, reader io.Reader,
 		strings.Join(quoted, ", "),
 	)
 
-	tag, err := conn.Conn().PgConn().CopyFrom(ctx, br, copySQL)
+	tag, err := conn.Conn().PgConn().CopyFrom(ctx, copyReader, copySQL)
 	if err != nil {
 		return tag.RowsAffected(), fmt.Errorf("COPY failed: %w", err)
 	}
 	return tag.RowsAffected(), nil
+}
+
+// restreamWithoutColumn parses a CSV stream and re-emits each record with
+// the cell at dropIdx removed. firstRecord is the already-parsed first row
+// (consumed during sniff); src holds the remaining unread bytes.
+//
+// Runs in its own goroutine; closes the pipe writer on completion so the
+// COPY reader sees EOF. On parse error it propagates via CloseWithError so
+// the COPY call fails fast instead of hanging on a half-written stream.
+func restreamWithoutColumn(pw *io.PipeWriter, firstRecord []string, src io.Reader, dropIdx int) {
+	cw := csv.NewWriter(pw)
+	closeErr := func() error {
+		cw.Flush()
+		return cw.Error()
+	}
+
+	if err := cw.Write(sliceDropAt(firstRecord, dropIdx)); err != nil {
+		_ = pw.CloseWithError(err)
+		return
+	}
+
+	cr := csv.NewReader(src)
+	cr.TrimLeadingSpace = true
+	cr.FieldsPerRecord = -1 // tolerate ragged rows; COPY will surface column-count errors
+	for {
+		rec, err := cr.Read()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			_ = pw.CloseWithError(fmt.Errorf("CSV parse error during re-stream: %w", err))
+			return
+		}
+		if err := cw.Write(sliceDropAt(rec, dropIdx)); err != nil {
+			_ = pw.CloseWithError(err)
+			return
+		}
+	}
+	if err := closeErr(); err != nil {
+		_ = pw.CloseWithError(err)
+		return
+	}
+	_ = pw.Close()
+}
+
+func indexOfFold(slice []string, target string) int {
+	for i, s := range slice {
+		if strings.EqualFold(s, target) {
+			return i
+		}
+	}
+	return -1
+}
+
+func sliceDropAt(s []string, idx int) []string {
+	if idx < 0 || idx >= len(s) {
+		return s
+	}
+	out := make([]string, 0, len(s)-1)
+	out = append(out, s[:idx]...)
+	out = append(out, s[idx+1:]...)
+	return out
 }
 
 // ensureTableForHeaders creates the destination table (with a SERIAL id and

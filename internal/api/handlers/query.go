@@ -13,46 +13,59 @@ import (
 	"github.com/rapibase/rapibase/internal/models"
 )
 
-// streamUploadedFile finds the multipart "file" part in the request body and
-// returns it as an io.Reader streaming from the network. It avoids the
-// default Fiber/fasthttp path that spills the entire multipart payload to a
-// temp file on disk before the handler can see it, which is critical for
-// multi-GB imports (CDR-style CSVs).
+// streamUploadedFile returns an io.Reader over the multipart "file" part of
+// the request. It tries two paths, in order:
 //
-// If the request is not multipart, returns ok=false so the caller can fall
-// back to reading the raw body (used by curl-style JSON/SQL posts).
+//  1. Network-streaming: when fasthttp exposes the body as a live stream
+//     (StreamRequestBody=true AND body is large enough that fasthttp didn't
+//     preload it), parse multipart on the fly. No disk spill, no extra RAM.
+//
+//  2. Buffered fallback: fasthttp preloads small bodies into memory even
+//     with stream mode on, so BodyStream() returns nil. Fall back to
+//     c.FormFile, which uses fasthttp's parsed multipart form. Large files
+//     are spilled to a temp disk file and then streamed from there.
+//
+// Returns ok=false (without error) only when the request is not multipart
+// at all, so the caller can fall back to raw-body parsing for curl-style
+// JSON/SQL posts.
 func streamUploadedFile(c *fiber.Ctx) (io.Reader, func(), bool, error) {
 	ct := c.Get("Content-Type")
 	mediaType, params, err := mime.ParseMediaType(ct)
-	if err != nil || !strings.HasPrefix(mediaType, "multipart/") {
-		return nil, func() {}, false, nil
-	}
-	boundary := params["boundary"]
-	if boundary == "" {
-		return nil, func() {}, false, fmt.Errorf("missing multipart boundary")
-	}
-
-	body := c.Request().BodyStream()
-	if body == nil {
-		// StreamRequestBody disabled or body already consumed — fall back
-		// to FormFile so we don't break non-streaming setups.
+	isMultipart := err == nil && strings.HasPrefix(mediaType, "multipart/")
+	if !isMultipart {
 		return nil, func() {}, false, nil
 	}
 
-	mr := multipart.NewReader(body, boundary)
-	for {
-		part, err := mr.NextPart()
-		if err == io.EOF {
-			return nil, func() {}, false, fmt.Errorf("no file part in multipart upload")
+	if body := c.Request().BodyStream(); body != nil {
+		boundary := params["boundary"]
+		if boundary == "" {
+			return nil, func() {}, false, fmt.Errorf("missing multipart boundary")
 		}
-		if err != nil {
-			return nil, func() {}, false, fmt.Errorf("multipart parse error: %w", err)
+		mr := multipart.NewReader(body, boundary)
+		for {
+			part, err := mr.NextPart()
+			if err == io.EOF {
+				return nil, func() {}, false, fmt.Errorf("no file part in multipart upload")
+			}
+			if err != nil {
+				return nil, func() {}, false, fmt.Errorf("multipart parse error: %w", err)
+			}
+			if part.FormName() == "file" {
+				return part, func() { _ = part.Close() }, true, nil
+			}
+			_ = part.Close()
 		}
-		if part.FormName() == "file" {
-			return part, func() { _ = part.Close() }, true, nil
-		}
-		_ = part.Close()
 	}
+
+	fh, err := c.FormFile("file")
+	if err != nil {
+		return nil, func() {}, false, fmt.Errorf("no file part in multipart upload: %w", err)
+	}
+	f, err := fh.Open()
+	if err != nil {
+		return nil, func() {}, false, fmt.Errorf("failed to open uploaded file: %w", err)
+	}
+	return f, func() { _ = f.Close() }, true, nil
 }
 
 type QueryHandler struct {
