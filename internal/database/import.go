@@ -440,6 +440,25 @@ func (db *DB) ImportCSV(ctx context.Context, tableName string, reader io.Reader,
 		return 0, fmt.Errorf("CSV file has no columns")
 	}
 
+	// Trim trailing empty headers caused by lines that end with the
+	// delimiter ("a;b;c;\n" parses to ["a","b","c",""]). Common in Excel
+	// exports. We also need to drop the matching trailing cell from each
+	// data row, which forces the re-stream path below.
+	trimmedTrailing := 0
+	for i := len(headers) - 1; i >= 0; i-- {
+		if strings.TrimSpace(headers[i]) == "" {
+			trimmedTrailing++
+		} else {
+			break
+		}
+	}
+	if trimmedTrailing > 0 {
+		headers = headers[:len(headers)-trimmedTrailing]
+		if len(headers) == 0 {
+			return 0, fmt.Errorf("CSV has no usable column headers")
+		}
+	}
+
 	normalizedHeaders := make([]string, len(headers))
 	for i, h := range headers {
 		normalized := normalizeColumnName(h)
@@ -455,41 +474,62 @@ func (db *DB) ImportCSV(ctx context.Context, tableName string, reader io.Reader,
 		return 0, err
 	}
 
-	// Decide id mode by sniffing the first data row.
+	// Build the COPY plan. We may need to re-stream when:
+	//   - trailing delimiter columns must be filtered from every row, or
+	//   - the CSV's id column is empty in the first row (auto-gen mode).
+	// Otherwise stream verbatim into COPY.
 	idIdx := indexOfFold(normalizedHeaders, "id")
 	copyHeaders := normalizedHeaders
 	var copyReader io.Reader = br
 	cleanup := func() {}
 
-	if idIdx >= 0 {
-		firstDataLine, err := br.ReadString('\n')
-		if err != nil && !errors.Is(err, io.EOF) {
-			return 0, fmt.Errorf("failed to read first data row: %w", err)
-		}
-		firstDataLine = strings.TrimRight(firstDataLine, "\r\n")
-		if firstDataLine == "" {
-			// Header-only file: nothing to copy, schema already ensured.
-			return 0, nil
+	if idIdx >= 0 || trimmedTrailing > 0 {
+		var prologue []string
+		if idIdx >= 0 {
+			firstDataLine, err := br.ReadString('\n')
+			if err != nil && !errors.Is(err, io.EOF) {
+				return 0, fmt.Errorf("failed to read first data row: %w", err)
+			}
+			firstDataLine = strings.TrimRight(firstDataLine, "\r\n")
+			if firstDataLine == "" {
+				// Header-only file: nothing to copy.
+				return 0, nil
+			}
+			rdr := csv.NewReader(strings.NewReader(firstDataLine))
+			rdr.Comma = delim
+			prologue, err = rdr.Read()
+			if err != nil {
+				return 0, fmt.Errorf("failed to parse first data row: %w", err)
+			}
 		}
 
-		firstRowParser := csv.NewReader(strings.NewReader(firstDataLine))
-		firstRowParser.Comma = delim
-		firstRecord, err := firstRowParser.Read()
-		if err != nil {
-			return 0, fmt.Errorf("failed to parse first data row: %w", err)
-		}
+		idEmpty := idIdx >= 0 && idIdx < len(prologue) && strings.TrimSpace(prologue[idIdx]) == ""
 
-		idEmpty := idIdx < len(firstRecord) && strings.TrimSpace(firstRecord[idIdx]) == ""
-		if idEmpty {
-			copyHeaders = sliceDropAt(normalizedHeaders, idIdx)
+		if trimmedTrailing > 0 || idEmpty {
+			keep := make([]int, 0, len(normalizedHeaders))
+			for i := range normalizedHeaders {
+				if idEmpty && i == idIdx {
+					continue
+				}
+				keep = append(keep, i)
+			}
+			copyHeaders = make([]string, len(keep))
+			for i, idx := range keep {
+				copyHeaders[i] = normalizedHeaders[idx]
+			}
 			pr, pw := io.Pipe()
-			go restreamWithoutColumn(pw, firstRecord, br, idIdx, delim)
+			go restreamFiltered(pw, delim, keep, prologue, br)
 			copyReader = pr
 			cleanup = func() { _ = pr.Close() }
-		} else {
-			// id is populated — put the sniffed line back in front of the
-			// remaining stream and let COPY ingest it verbatim.
-			copyReader = io.MultiReader(strings.NewReader(firstDataLine+"\n"), br)
+		} else if prologue != nil {
+			// id sniff happened but id is populated and there's no trim;
+			// re-emit the first line ahead of the remaining stream.
+			var buf bytes.Buffer
+			w := csv.NewWriter(&buf)
+			w.Comma = delim
+			_ = w.Write(prologue)
+			w.Flush()
+			copyReader = io.MultiReader(&buf, br)
 		}
 	}
 	defer cleanup()
@@ -519,30 +559,42 @@ func (db *DB) ImportCSV(ctx context.Context, tableName string, reader io.Reader,
 	return tag.RowsAffected(), nil
 }
 
-// restreamWithoutColumn parses a CSV stream and re-emits each record with
-// the cell at dropIdx removed. firstRecord is the already-parsed first row
-// (consumed during sniff); src holds the remaining unread bytes.
+// restreamFiltered re-emits a CSV stream keeping only the columns listed in
+// keep (positional indices into the original row). prologue, if non-nil, is
+// the already-parsed first data row consumed during sniff and is emitted
+// before continuing with src.
 //
-// Runs in its own goroutine; closes the pipe writer on completion so the
-// COPY reader sees EOF. On parse error it propagates via CloseWithError so
-// the COPY call fails fast instead of hanging on a half-written stream.
-func restreamWithoutColumn(pw *io.PipeWriter, firstRecord []string, src io.Reader, dropIdx int, delim rune) {
+// Each row is parsed defensively (FieldsPerRecord=-1) and short rows yield
+// empty trailing cells in the output — that lets us tolerate the common
+// "extra trailing delimiter" pattern (e.g. lines ending with ";") without
+// erroring. Runs in its own goroutine; closes the pipe writer on completion
+// so the COPY reader sees EOF, and propagates parse errors via
+// CloseWithError so the COPY call fails fast instead of hanging.
+func restreamFiltered(pw *io.PipeWriter, delim rune, keep []int, prologue []string, src io.Reader) {
 	cw := csv.NewWriter(pw)
 	cw.Comma = delim
-	closeErr := func() error {
-		cw.Flush()
-		return cw.Error()
+
+	emit := func(rec []string) error {
+		out := make([]string, len(keep))
+		for i, idx := range keep {
+			if idx < len(rec) {
+				out[i] = rec[idx]
+			}
+		}
+		return cw.Write(out)
 	}
 
-	if err := cw.Write(sliceDropAt(firstRecord, dropIdx)); err != nil {
-		_ = pw.CloseWithError(err)
-		return
+	if prologue != nil {
+		if err := emit(prologue); err != nil {
+			_ = pw.CloseWithError(err)
+			return
+		}
 	}
 
 	cr := csv.NewReader(src)
 	cr.Comma = delim
 	cr.TrimLeadingSpace = true
-	cr.FieldsPerRecord = -1 // tolerate ragged rows; COPY will surface column-count errors
+	cr.FieldsPerRecord = -1
 	for {
 		rec, err := cr.Read()
 		if errors.Is(err, io.EOF) {
@@ -552,12 +604,13 @@ func restreamWithoutColumn(pw *io.PipeWriter, firstRecord []string, src io.Reade
 			_ = pw.CloseWithError(fmt.Errorf("CSV parse error during re-stream: %w", err))
 			return
 		}
-		if err := cw.Write(sliceDropAt(rec, dropIdx)); err != nil {
+		if err := emit(rec); err != nil {
 			_ = pw.CloseWithError(err)
 			return
 		}
 	}
-	if err := closeErr(); err != nil {
+	cw.Flush()
+	if err := cw.Error(); err != nil {
 		_ = pw.CloseWithError(err)
 		return
 	}
@@ -602,15 +655,6 @@ func indexOfFold(slice []string, target string) int {
 	return -1
 }
 
-func sliceDropAt(s []string, idx int) []string {
-	if idx < 0 || idx >= len(s) {
-		return s
-	}
-	out := make([]string, 0, len(s)-1)
-	out = append(out, s[:idx]...)
-	out = append(out, s[idx+1:]...)
-	return out
-}
 
 // ensureTableForHeaders creates the destination table (with a SERIAL id and
 // the given headers as TEXT) when missing, or adds any header that is not yet
