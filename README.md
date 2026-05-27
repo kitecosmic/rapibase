@@ -11,7 +11,8 @@
 - ✅ **Visual Table Management** - Create, edit, and delete tables through a modern UI
 - ✅ **SQL Editor** - Execute raw SQL queries with syntax highlighting
 - ✅ **Data Import/Export** - Import from SQL or JSON, export to both formats
-- ✅ **REST API** - Auto-generated CRUD endpoints for all your tables
+- ✅ **REST API** - Auto-generated CRUD endpoints for all your tables (works with views too)
+- ✅ **RPC Endpoint** - Call any Postgres function by name for complex queries, aggregations and reports
 - ✅ **File Storage** - S3-compatible storage with MinIO (buckets, upload, download, image preview)
 - ✅ **MCP for AI Agents** - Built-in [Model Context Protocol](https://modelcontextprotocol.io) endpoint at `/mcp` so Claude (and other agents) can discover tables, run CRUD, raw SQL, DDL and storage ops with one URL + one API key
 - ✅ **Docker Ready** - Single command deployment with docker-compose
@@ -299,6 +300,40 @@ Query parameters:
 - `order` - Sort direction (asc/desc)
 - `select` - Comma-separated columns to return
 - `column.operator=value` - Filter rows (operators: eq, neq, gt, gte, lt, lte, like, ilike, is, in)
+
+> Views and materialized views also work on `GET /api/v1/rest/:name` — Postgres treats them as tables. Use materialized views for pre-aggregated reports over millions of rows; the `COUNT(*)` per request becomes free.
+
+### RPC — Call Postgres Functions (For Your Apps)
+Requires `apikey` header. For aggregations, reports or any logic that does not fit the generic CRUD endpoints, define a Postgres function and call it by name.
+
+```
+POST   /api/v1/rpc/:name             - Invoke function with JSON named args
+```
+
+JSON body keys become named arguments (`fn(key1 := $1, key2 := $2)`). Empty body invokes the function with no arguments. The response is the array of result rows.
+
+```sql
+-- Define once in the SQL editor
+CREATE FUNCTION top_products(p_limit int)
+RETURNS TABLE(id int, name text, total_sold int)
+LANGUAGE sql AS $$
+    SELECT p.id, p.name, SUM(oi.quantity)::int
+    FROM products p
+    JOIN order_items oi ON oi.product_id = p.id
+    GROUP BY p.id, p.name
+    ORDER BY 3 DESC
+    LIMIT p_limit;
+$$;
+```
+
+```bash
+curl -X POST https://yourdomain.com/api/v1/rpc/top_products \
+  -H "apikey: $SERVICE_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"p_limit": 10}'
+```
+
+Permissions are enforced by Postgres at the role level. Internal `_rapibase_*` functions are blocked.
 
 ### Tables (Admin)
 ```

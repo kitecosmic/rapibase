@@ -13,10 +13,11 @@ import {
   Code,
   FileText,
   ChevronRight,
-  HardDrive
+  HardDrive,
+  FunctionSquare
 } from 'lucide-react'
 
-type DocSection = 'overview' | 'quickstart' | 'auth-flow' | 'api-keys' | 'rest-api' | 'storage-api' | 'email-flows' | 'mcp' | 'examples'
+type DocSection = 'overview' | 'quickstart' | 'auth-flow' | 'api-keys' | 'rest-api' | 'rpc' | 'storage-api' | 'email-flows' | 'mcp' | 'examples'
 
 export default function Docs() {
   const [copiedSection, setCopiedSection] = useState<string | null>(null)
@@ -35,6 +36,7 @@ export default function Docs() {
     { id: 'auth-flow', title: 'Authentication Flow', icon: <Users className="w-4 h-4" /> },
     { id: 'email-flows', title: 'Email Flows', icon: <Mail className="w-4 h-4" /> },
     { id: 'rest-api', title: 'REST API', icon: <Database className="w-4 h-4" /> },
+    { id: 'rpc', title: 'RPC (Functions)', icon: <FunctionSquare className="w-4 h-4" /> },
     { id: 'storage-api', title: 'Storage API', icon: <HardDrive className="w-4 h-4" /> },
     { id: 'mcp', title: 'MCP for AI Agents', icon: <Bot className="w-4 h-4" /> },
     { id: 'examples', title: 'Full Examples', icon: <Code className="w-4 h-4" /> },
@@ -251,6 +253,84 @@ Body: { "price": 149.99 }
 \`\`\`
 DELETE /api/v1/rest/{table}/{id}
 \`\`\`
+
+**Views and materialized views** also work on \`GET /api/v1/rest/{name}\` — Postgres treats them as tables. Use materialized views for pre-aggregated reports over millions of rows.
+
+## RPC — Call Postgres Functions
+
+Base URL: \`/api/v1/rpc\`
+
+When the generic REST CRUD is not enough (aggregations, joins, window functions, parametrised reports), define a Postgres function and call it by name.
+
+### Step 1 — Define the function
+
+\`\`\`sql
+CREATE OR REPLACE FUNCTION top_products(p_limit int)
+RETURNS TABLE(id int, name text, total_sold int)
+LANGUAGE sql AS $$
+    SELECT p.id, p.name, SUM(oi.quantity)::int
+    FROM products p
+    JOIN order_items oi ON oi.product_id = p.id
+    GROUP BY p.id, p.name
+    ORDER BY 3 DESC
+    LIMIT p_limit;
+$$;
+\`\`\`
+
+### Step 2 — Invoke it
+
+JSON body keys become named arguments: \`fn(key1 := $1, key2 := $2)\`.
+
+\`\`\`
+POST /api/v1/rpc/top_products
+Headers: { "apikey": "SERVICE_KEY", "Content-Type": "application/json" }
+Body: { "p_limit": 10 }
+
+Response: [
+  { "id": 42, "name": "Wireless Mouse", "total_sold": 1280 },
+  { "id": 17, "name": "USB-C Cable",    "total_sold": 945  }
+]
+\`\`\`
+
+### No-argument functions
+
+Send an empty body or \`{}\` to call a function with no arguments.
+
+### JavaScript example
+
+\`\`\`javascript
+async function callRpc(name, args = {}) {
+  const res = await fetch(\`\${RAPIBASE_URL}/api/v1/rpc/\${name}\`, {
+    method: 'POST',
+    headers: {
+      'apikey': SERVICE_KEY,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(args)
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+const rows = await callRpc('top_products', { p_limit: 10 });
+\`\`\`
+
+### When to use RPC vs REST
+
+| Use case | Endpoint |
+|---|---|
+| Listing / filtering / inserting rows | \`/rest/{table}\` |
+| Pre-aggregated report that changes rarely | \`/rest/{materialized_view}\` |
+| Aggregation with parameters | \`/rpc/{function}\` |
+| Multi-step atomic write | \`/rpc/{function}\` |
+| Heavy join across several tables | \`/rpc/{function}\` |
+
+### Security
+
+- Functions run with the privileges of the calling Postgres role.
+- Argument values are bound as \`$1, $2, …\` placeholders — no SQL injection through arguments.
+- Internal \`_rapibase_*\` functions are blocked.
+- For multi-tenant production, create a dedicated role and grant \`EXECUTE\` only on the functions you want exposed.
 
 ## Storage API
 
@@ -951,6 +1031,131 @@ Response: { "id": 1, "name": "Product", "price": 149.99, ... }`} />
 
 Response: { "message": "Row deleted successfully" }`} />
               </div>
+
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                <p className="text-sm text-blue-900">
+                  <strong>💡 Views and materialized views</strong> also work on <code>GET /api/v1/rest/&#123;name&#125;</code> — Postgres treats them as tables. Use materialized views for pre-aggregated reports over millions of rows so the per-request <code>COUNT(*)</code> becomes free.
+                </p>
+              </div>
+            </div>
+          </div>
+        )
+
+      case 'rpc':
+        return (
+          <div className="space-y-6">
+            <div>
+              <h2 className="text-2xl font-bold text-gray-900 mb-2 flex items-center gap-2">
+                <FunctionSquare className="w-7 h-7 text-indigo-600" /> RPC — Call Postgres Functions
+              </h2>
+              <p className="text-gray-600">
+                The REST API gives you generic CRUD on tables. When you need aggregations, joins, window functions or any logic beyond filter/order/paginate, define a Postgres function once and call it by name at <code className="px-1.5 py-0.5 bg-gray-100 rounded text-sm">POST /api/v1/rpc/&#123;name&#125;</code>.
+              </p>
+            </div>
+
+            <div className="bg-gray-50 rounded-lg p-4 border">
+              <p className="text-sm text-gray-600">
+                Base URL: <code className="bg-gray-200 px-2 py-1 rounded">/api/v1/rpc</code>
+              </p>
+            </div>
+
+            <div>
+              <h3 className="text-lg font-semibold text-gray-900 mb-3">Step 1 — Define the function in Postgres</h3>
+              <p className="text-gray-600 mb-3">
+                From the SQL Editor (or the dashboard query endpoint), create a function. You can use any Postgres feature: aggregations, CTEs, joins, window functions, etc.
+              </p>
+              <CodeBlock code={`CREATE OR REPLACE FUNCTION top_products(p_limit int)
+RETURNS TABLE(
+    id          int,
+    name        text,
+    total_sold  int
+) LANGUAGE sql AS $$
+    SELECT p.id,
+           p.name,
+           SUM(oi.quantity)::int
+    FROM products p
+    JOIN order_items oi ON oi.product_id = p.id
+    GROUP BY p.id, p.name
+    ORDER BY 3 DESC
+    LIMIT p_limit;
+$$;`} />
+            </div>
+
+            <div>
+              <h3 className="text-lg font-semibold text-gray-900 mb-3">Step 2 — Invoke it via HTTP</h3>
+              <p className="text-gray-600 mb-3">
+                The JSON body keys become <strong>named arguments</strong> (<code>fn(key1 := $1, key2 := $2)</code>). Order does not matter, and functions with default values can be called with a subset.
+              </p>
+              <CodeBlock code={`POST /api/v1/rpc/top_products
+Headers: { "apikey": "SERVICE_KEY", "Content-Type": "application/json" }
+Body: { "p_limit": 10 }
+
+Response: [
+  { "id": 42, "name": "Wireless Mouse", "total_sold": 1280 },
+  { "id": 17, "name": "USB-C Cable",    "total_sold": 945  },
+  ...
+]`} />
+            </div>
+
+            <div>
+              <h3 className="text-lg font-semibold text-gray-900 mb-3">No-argument functions</h3>
+              <p className="text-gray-600 mb-3">
+                Send an empty body or <code>&#123;&#125;</code> to call a function with no arguments.
+              </p>
+              <CodeBlock code={`POST /api/v1/rpc/dashboard_summary
+Headers: { "apikey": "SERVICE_KEY" }
+Body: {}
+
+Response: [
+  { "users_total": 1042, "orders_today": 87, "revenue_month": 124300 }
+]`} />
+            </div>
+
+            <div>
+              <h3 className="text-lg font-semibold text-gray-900 mb-3">JavaScript example</h3>
+              <CodeBlock code={`async function callRpc(name, args = {}) {
+  const res = await fetch(\`\${RAPIBASE_URL}/api/v1/rpc/\${name}\`, {
+    method: 'POST',
+    headers: {
+      'apikey': SERVICE_KEY,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(args)
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+// Usage
+const rows = await callRpc('top_products', { p_limit: 10 });
+console.table(rows);`} />
+            </div>
+
+            <div>
+              <h3 className="text-lg font-semibold text-gray-900 mb-3">When to use RPC vs REST</h3>
+              <div className="overflow-x-auto">
+                <table className="w-full border border-gray-200 rounded-lg text-sm">
+                  <thead className="bg-gray-50">
+                    <tr className="text-left">
+                      <th className="px-4 py-2 font-semibold text-gray-700">Use case</th>
+                      <th className="px-4 py-2 font-semibold text-gray-700">Recommended endpoint</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200">
+                    <tr><td className="px-4 py-2">Listing / filtering / inserting rows of a table</td><td className="px-4 py-2 font-mono text-xs">/rest/&#123;table&#125;</td></tr>
+                    <tr><td className="px-4 py-2">Pre-aggregated report that changes rarely</td><td className="px-4 py-2 font-mono text-xs">/rest/&#123;materialized_view&#125;</td></tr>
+                    <tr><td className="px-4 py-2">Aggregation with parameters (date range, top-N, etc.)</td><td className="px-4 py-2 font-mono text-xs">/rpc/&#123;function&#125;</td></tr>
+                    <tr><td className="px-4 py-2">Multi-step write that must be atomic</td><td className="px-4 py-2 font-mono text-xs">/rpc/&#123;function&#125;</td></tr>
+                    <tr><td className="px-4 py-2">Heavy join across several tables</td><td className="px-4 py-2 font-mono text-xs">/rpc/&#123;function&#125;</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+              <p className="text-sm text-yellow-900">
+                <strong>🔒 Security:</strong> Functions run with the privileges of the calling Postgres role — the same way regular SQL does. Internal <code>_rapibase_*</code> functions are blocked. Argument values are bound as <code>$1, $2, …</code> placeholders, so SQL injection through arguments is not possible. For production multi-tenant setups, create a dedicated role and grant <code>EXECUTE</code> only on the functions you want exposed.
+              </p>
             </div>
           </div>
         )

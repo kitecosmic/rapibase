@@ -128,6 +128,43 @@ func (h *QueryHandler) ExecuteQuery(c *fiber.Ctx) error {
 	return c.JSON(result)
 }
 
+// CallRPC invokes a Postgres function by name. The JSON body becomes
+// named arguments: {"start": "...", "end": "..."} translates to
+// fn(start := $1, end := $2). Empty body invokes the function with no
+// arguments. Permissions are enforced by Postgres at the role level.
+func (h *QueryHandler) CallRPC(c *fiber.Ctx) error {
+	name := c.Params("name")
+	if name == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "Function name is required",
+		})
+	}
+
+	if strings.Contains(strings.ToUpper(name), "_RAPIBASE_") {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
+			"error": "Cannot call internal functions",
+		})
+	}
+
+	var args map[string]interface{}
+	if len(c.Body()) > 0 {
+		if err := c.BodyParser(&args); err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"error": "Invalid JSON body",
+			})
+		}
+	}
+
+	data, err := h.db.CallFunction(c.Context(), name, args)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": err.Error(),
+		})
+	}
+
+	return c.JSON(data)
+}
+
 // ImportSQL imports data from SQL
 func (h *QueryHandler) ImportSQL(c *fiber.Ctx) error {
 	reader, cleanup, ok, err := streamUploadedFile(c)

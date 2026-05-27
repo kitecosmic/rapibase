@@ -349,6 +349,38 @@ func (db *DB) DeleteRow(ctx context.Context, tableName string, id interface{}) e
 	return nil
 }
 
+// CallFunction invokes a Postgres function with named arguments and
+// returns the resulting rows. Argument names are validated as SQL
+// identifiers; values are bound via $N placeholders so they cannot
+// inject SQL. Functions with no args accept a nil or empty map.
+func (db *DB) CallFunction(ctx context.Context, name string, args map[string]interface{}) ([]map[string]interface{}, error) {
+	if !isValidIdentifier(name) {
+		return nil, fmt.Errorf("invalid function name")
+	}
+
+	var argPairs []string
+	var values []interface{}
+	i := 1
+	for k, v := range args {
+		if !isValidIdentifier(k) {
+			return nil, fmt.Errorf("invalid argument name: %s", k)
+		}
+		argPairs = append(argPairs, fmt.Sprintf("%s := $%d", quoteIdentifier(k), i))
+		values = append(values, v)
+		i++
+	}
+
+	query := fmt.Sprintf("SELECT * FROM %s(%s)", quoteIdentifier(name), strings.Join(argPairs, ", "))
+
+	rows, err := db.Pool.Query(ctx, query, values...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return pgxRowsToMaps(rows)
+}
+
 // ExecuteQuery executes a raw SQL query
 func (db *DB) ExecuteQuery(ctx context.Context, sql string, params []interface{}) (*models.QueryResult, error) {
 	start := time.Now()

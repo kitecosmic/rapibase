@@ -112,6 +112,10 @@ func SetupRoutes(app *fiber.App, db *database.DB, cfg *config.Config) *WebhookDi
 	restAPI.Put("/:name/:id", tablesHandler.UpdateRow)    // UPDATE
 	restAPI.Delete("/:name/:id", tablesHandler.DeleteRow) // DELETE
 
+	// RPC - Call Postgres functions by name with JSON named args
+	rpcAPI := api.Group("/rpc", apiKeyMiddleware.RequireAPIKey())
+	rpcAPI.Post("/:name", queryHandler.CallRPC)
+
 	// ============================================
 	// DASHBOARD - Protected routes (require admin JWT)
 	// ============================================
