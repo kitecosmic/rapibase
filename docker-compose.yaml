@@ -8,6 +8,16 @@
 services:
   rapibase:
     build: .
+    # Forward EVERY variable from .env into the container — including any
+    # added in future updates. Without this, a new setting (e.g.
+    # AUTH_SIGNUP_ENABLED) silently falls back to its built-in default just
+    # because it isn't listed in `environment:` below, even though it's in
+    # .env. `required: false` keeps `docker compose up` working with no
+    # .env at all (the ${VAR:-default} values below cover that case). The
+    # explicit `environment:` block always takes precedence over env_file.
+    env_file:
+      - path: .env
+        required: false
     # Ports are bound to 127.0.0.1 so ONLY a reverse proxy on the host
     # (Caddy/nginx) can reach them — never the public internet directly.
     # Exposing 8080 to 0.0.0.0 is how an attacker can bypass Caddy and
