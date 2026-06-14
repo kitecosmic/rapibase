@@ -202,20 +202,34 @@ DATABASE_URL=postgres://rapibase:rapibase@localhost:5432/rapibase?sslmode=disabl
 # Server
 PORT=8080
 APP_URL=http://localhost:8080
-CORS_ORIGINS=*
+CORS_ORIGINS=*                      # restrict to your domain(s) in production
 
 # Auth (Admin Dashboard)
-JWT_SECRET=change-this-secret-in-production
+# Leave JWT_SECRET / ADMIN_PASSWORD BLANK to auto-generate strong values on
+# first boot (persisted in the DB, stable across restarts). Known weak/example
+# values are rejected — rapibase refuses to start with them.
+JWT_SECRET=
 ADMIN_EMAIL=admin@rapibase.local
-ADMIN_PASSWORD=admin123
+ADMIN_PASSWORD=
 
 # Token Expiration
 JWT_EXPIRY=1h           # Access token duration (default: 1 hour)
 REFRESH_EXPIRY=7d       # Refresh token duration (default: 7 days)
 
-# API Keys
-ANON_KEY=your-anon-key              # Public key for client-side apps
-SERVICE_KEY=your-service-key        # Secret key for server-side/admin
+# API Keys — leave BLANK to auto-generate (the values are printed in the logs
+# on first boot). ANON_KEY: public, for client apps. SERVICE_KEY: secret,
+# server-side only.
+ANON_KEY=
+SERVICE_KEY=
+
+# Public self-registration (POST /api/v1/auth/signup). OFF by default; data is
+# isolated per user by Row-Level Security, so configure RLS before enabling.
+AUTH_SIGNUP_ENABLED=false
+AUTH_SIGNUP_ALLOWED_DOMAINS=        # optional email-domain allowlist; empty = any
+
+# Access log (records every API request: IP, identity, status)
+ACCESS_LOG_ENABLED=true
+ACCESS_LOG_RETENTION_DAYS=30
 
 # SMTP (optional - for email features)
 SMTP_HOST=smtp.example.com
