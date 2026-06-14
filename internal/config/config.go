@@ -187,16 +187,34 @@ func (c *Config) ResolveSecrets(ctx context.Context, store SecretStore) error {
 		{"SERVICE_KEY", &c.ServiceKey, "service_key", 24},
 	}
 
+	// First pass: validate every operator-provided secret and collect
+	// ALL problems, so the operator fixes them in one go instead of
+	// hitting them one container-restart at a time.
+	var problems []string
 	for _, f := range fields {
 		val := strings.TrimSpace(*f.ptr)
-		if val != "" {
-			if isWeakSecret(val) {
-				return fmt.Errorf("%s is set to a known default/example value (public in the repo); set a strong unique secret or leave it blank to auto-generate", f.name)
-			}
-			if len(val) < f.minLen {
-				return fmt.Errorf("%s is too short (%d chars); use at least %d", f.name, len(val), f.minLen)
-			}
-			*f.ptr = val
+		if val == "" {
+			continue
+		}
+		if isWeakSecret(val) {
+			problems = append(problems, fmt.Sprintf("  • %s is a known default/example value (public in the repo)", f.name))
+		} else if len(val) < f.minLen {
+			problems = append(problems, fmt.Sprintf("  • %s is too short (%d chars, need at least %d)", f.name, len(val), f.minLen))
+		}
+	}
+	if len(problems) > 0 {
+		return fmt.Errorf(
+			"refusing to start — weak or invalid secret(s):\n%s\n\n"+
+				"Fix: give each a strong unique value, OR leave it BLANK in your env/.env so\n"+
+				"rapibase generates a strong one automatically (persisted in the DB, stable\n"+
+				"across restarts). This is a one-time step on this update.",
+			strings.Join(problems, "\n"))
+	}
+
+	// Second pass: use the provided value, or load/generate a blank one.
+	for _, f := range fields {
+		if strings.TrimSpace(*f.ptr) != "" {
+			*f.ptr = strings.TrimSpace(*f.ptr)
 			continue
 		}
 		stored, ok, err := store.GetSecret(ctx, f.storeKey)
