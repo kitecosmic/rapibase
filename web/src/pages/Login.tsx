@@ -11,6 +11,8 @@ export default function Login() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [mfaRequired, setMfaRequired] = useState(false)
+  const [totpCode, setTotpCode] = useState('')
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -18,11 +20,17 @@ export default function Login() {
     setLoading(true)
 
     try {
-      const data = await auth.login(email, password)
+      const data = await auth.login(email, password, mfaRequired ? totpCode : undefined)
       setAuth(data.token, data.refresh_token, data.user)
       navigate('/')
     } catch (err: any) {
-      setError(err.message || 'Login failed')
+      if (err?.mfaRequired) {
+        // First step succeeded (password OK); prompt for the TOTP code.
+        setMfaRequired(true)
+        setError('')
+      } else {
+        setError(err.message || 'Login failed')
+      }
     } finally {
       setLoading(false)
     }
@@ -77,9 +85,32 @@ export default function Login() {
               />
             </div>
 
+            {mfaRequired && (
+              <div>
+                <label htmlFor="totp" className="block text-sm font-medium text-gray-700 mb-1">
+                  Authentication code
+                </label>
+                <input
+                  id="totp"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  maxLength={6}
+                  value={totpCode}
+                  onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, ''))}
+                  required
+                  autoFocus
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-shadow tracking-widest text-center"
+                  placeholder="123456"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Enter the 6-digit code from your authenticator app.
+                </p>
+              </div>
+            )}
+
             <div className="flex items-center justify-end">
-              <Link 
-                to="/forgot-password" 
+              <Link
+                to="/forgot-password"
                 className="text-sm text-blue-600 hover:text-blue-700"
               >
                 Forgot password?

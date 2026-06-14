@@ -102,11 +102,31 @@ async function request<T>(
 
 // Auth
 export const auth = {
-  login: (email: string, password: string) =>
-    request<{ token: string; refresh_token: string; user: any }>('/auth/login', {
+  login: async (email: string, password: string, totpCode?: string) => {
+    // Direct fetch (not `request`) so we can read the response body: the
+    // 401 "MFA required" signal and specific errors would otherwise be
+    // swallowed by the shared refresh/redirect handling.
+    const res = await fetch(`${API_BASE}/auth/login`, {
       method: 'POST',
-      body: JSON.stringify({ email, password }),
-    }),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password, totp_code: totpCode }),
+    })
+    const data = await res.json().catch(() => ({} as any))
+    if (!res.ok) {
+      const err = new ApiError(res.status, data.error || 'Login failed') as ApiError & { mfaRequired?: boolean }
+      err.mfaRequired = !!data.mfa_required
+      throw err
+    }
+    return data as { token: string; refresh_token: string; user: any }
+  },
+
+  // MFA (TOTP) management for the signed-in admin.
+  mfaStatus: () => request<{ enabled: boolean }>('/auth/mfa/status'),
+  mfaSetup: () => request<{ secret: string; otpauth_url: string }>('/auth/mfa/setup', { method: 'POST' }),
+  mfaVerify: (code: string) =>
+    request<{ message: string }>('/auth/mfa/verify', { method: 'POST', body: JSON.stringify({ code }) }),
+  mfaDisable: (password: string, code: string) =>
+    request<{ message: string }>('/auth/mfa/disable', { method: 'POST', body: JSON.stringify({ password, code }) }),
 
   register: (email: string, password: string) =>
     request<{ token: string; refresh_token: string; user: any }>('/auth/register', {
@@ -191,6 +211,45 @@ export const query = {
       method: 'POST',
       body: JSON.stringify({ sql, params }),
     }),
+}
+
+// Row-Level Security
+export type RLSPolicy = {
+  name: string
+  command: string
+  roles: string
+  using: string
+  with_check: string
+}
+
+export type RLSStatus = {
+  table: string
+  enabled: boolean
+  forced: boolean
+  policies: string[]
+  policy_details?: RLSPolicy[]
+  mode: string
+  owner_column: string
+}
+
+export const rls = {
+  status: (table: string) => request<RLSStatus>(`/tables/${table}/rls`),
+  enable: (table: string, mode: string, ownerColumn?: string) =>
+    request<any>(`/tables/${table}/rls`, {
+      method: 'POST',
+      body: JSON.stringify({ mode, owner_column: ownerColumn }),
+    }),
+  disable: (table: string) =>
+    request<any>(`/tables/${table}/rls`, { method: 'DELETE' }),
+}
+
+// Access log
+export const accessLogs = {
+  list: (limit = 100, offset = 0, ip?: string) => {
+    const p = new URLSearchParams({ limit: String(limit), offset: String(offset) })
+    if (ip) p.set('ip', ip)
+    return request<{ logs: any[] }>(`/access-logs?${p}`)
+  },
 }
 
 export type UploadProgress = { loaded: number; total: number; phase: 'uploading' | 'processing' }

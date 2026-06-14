@@ -20,9 +20,11 @@ import {
   Copy,
   Check,
   Filter as FilterIcon,
+  ShieldCheck,
 } from 'lucide-react'
+import TableRlsPanel from '../components/TableRlsPanel'
 
-type TabType = 'data' | 'api'
+type TabType = 'data' | 'api' | 'rls'
 
 type RowFilter = { column: string; operator: string; value: string }
 
@@ -530,8 +532,8 @@ curl_close($ch);`
         <button
           onClick={() => setActiveTab('api')}
           className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-            activeTab === 'api' 
-              ? 'bg-white text-gray-900 shadow-sm' 
+            activeTab === 'api'
+              ? 'bg-white text-gray-900 shadow-sm'
               : 'text-gray-600 hover:text-gray-900'
           }`}
         >
@@ -540,7 +542,26 @@ curl_close($ch);`
             API Docs
           </span>
         </button>
+        <button
+          onClick={() => setActiveTab('rls')}
+          className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+            activeTab === 'rls'
+              ? 'bg-white text-gray-900 shadow-sm'
+              : 'text-gray-600 hover:text-gray-900'
+          }`}
+        >
+          <span className="flex items-center gap-2">
+            <ShieldCheck className="w-4 h-4" />
+            RLS
+          </span>
+        </button>
       </div>
+
+      {activeTab === 'rls' && (
+        <div className="bg-white rounded-xl border border-gray-200 p-6">
+          <TableRlsPanel table={name!} columns={columns} />
+        </div>
+      )}
 
       {/* Insert Modal */}
       {showInsert && (

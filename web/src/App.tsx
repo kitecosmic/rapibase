@@ -15,6 +15,7 @@ import Webhooks from './pages/Webhooks'
 import Notifications from './pages/Notifications'
 import Storage from './pages/Storage'
 import Realtime from './pages/Realtime'
+import Security from './pages/Security'
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const { token } = useAuthStore()
@@ -47,6 +48,7 @@ export default function App() {
           <Route path="notifications" element={<Notifications />} />
           <Route path="storage" element={<Storage />} />
           <Route path="realtime" element={<Realtime />} />
+          <Route path="security" element={<Security />} />
           <Route path="docs" element={<Docs />} />
         </Route>
       </Routes>

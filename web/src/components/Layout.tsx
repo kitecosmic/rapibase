@@ -18,13 +18,15 @@ import {
   ChevronRight,
   HardDrive,
   ChevronDown,
-  Radio
+  Radio,
+  ShieldCheck
 } from 'lucide-react'
 import { useState, useEffect } from 'react'
 
 const navigation = [
   { name: 'Dashboard', href: '/', icon: Database },
   { name: 'Authentication', href: '/auth', icon: Shield },
+  { name: 'Security', href: '/security', icon: ShieldCheck },
   { name: 'Tables', href: '/tables', icon: Table2 },
   { name: 'Storage', href: '/storage', icon: HardDrive },
   { name: 'Webhooks', href: '/webhooks', icon: Webhook },

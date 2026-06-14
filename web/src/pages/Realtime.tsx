@@ -11,7 +11,6 @@ import {
   Radio,
 } from 'lucide-react'
 import { authedFetch } from '../lib/api'
-import { useAuthStore } from '../store/auth'
 
 type Tab = 'docs' | 'monitor'
 
@@ -282,16 +281,18 @@ function LiveMonitor() {
     pausedRef.current = paused
   }, [paused])
 
-  const { token } = useAuthStore()
-
-  // Fetch the project keys so we can authenticate the monitor.
-  const [anonKey, setAnonKey] = useState<string | null>(null)
+  // The admin Live Monitor connects with the SERVICE key so it sees all
+  // changes (not row-scoped) — it is an operator tool, not an app
+  // client. Using the service key also avoids presenting the dashboard
+  // JWT (audience "dashboard") to the realtime endpoint, which only
+  // accepts app-audience tokens.
+  const [serviceKey, setServiceKey] = useState<string | null>(null)
   useEffect(() => {
     let cancelled = false
     authedFetch('/project')
       .then((r) => r.json())
       .then((p) => {
-        if (!cancelled) setAnonKey(p.anon_key)
+        if (!cancelled) setServiceKey(p.service_key)
       })
       .catch(() => {
         if (!cancelled) setError('could not load project keys')
@@ -302,12 +303,11 @@ function LiveMonitor() {
   }, [])
 
   const wsURL = useMemo(() => {
-    if (!anonKey) return null
+    if (!serviceKey) return null
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const params = new URLSearchParams({ apikey: anonKey })
-    if (token) params.set('token', token)
+    const params = new URLSearchParams({ apikey: serviceKey })
     return `${proto}//${window.location.host}/api/realtime/v1?${params.toString()}`
-  }, [anonKey, token])
+  }, [serviceKey])
 
   useEffect(() => {
     if (!wsURL) return
