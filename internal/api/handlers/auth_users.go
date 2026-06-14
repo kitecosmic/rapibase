@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -11,6 +12,22 @@ import (
 	"github.com/rapibase/rapibase/internal/config"
 	"github.com/rapibase/rapibase/internal/database"
 )
+
+// emailDomainAllowed reports whether email's domain is in the allowlist
+// (case-insensitive exact match on the part after '@').
+func emailDomainAllowed(email string, allowed []string) bool {
+	at := strings.LastIndex(email, "@")
+	if at < 0 || at == len(email)-1 {
+		return false
+	}
+	domain := strings.ToLower(email[at+1:])
+	for _, d := range allowed {
+		if domain == d {
+			return true
+		}
+	}
+	return false
+}
 
 type AuthUsersHandler struct {
 	db         *database.DB
@@ -54,6 +71,19 @@ func (h *AuthUsersHandler) SignUp(c *fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "Password must be at least 6 characters")
 	}
 
+	// Gate public self-registration. A SERVICE_KEY caller (trusted
+	// backend automation) bypasses the gate; anon-key/public callers are
+	// subject to the AUTH_SIGNUP_ENABLED flag and optional domain
+	// allowlist. Admins create users via the dashboard regardless.
+	if c.Locals("apiKeyType") != "service" {
+		if !h.cfg.SignupEnabled {
+			return fiber.NewError(fiber.StatusForbidden, "Public signup is disabled")
+		}
+		if len(h.cfg.SignupAllowedDomains) > 0 && !emailDomainAllowed(req.Email, h.cfg.SignupAllowedDomains) {
+			return fiber.NewError(fiber.StatusForbidden, "Email domain not allowed")
+		}
+	}
+
 	// Check if user exists
 	existing, _ := h.db.GetAuthUserByEmail(ctx, req.Email)
 	if existing != nil {
@@ -67,7 +97,7 @@ func (h *AuthUsersHandler) SignUp(c *fiber.Ctx) error {
 	}
 
 	// Generate tokens
-	token, err := h.jwtManager.GenerateToken(user.ID, user.Email, "user")
+	token, err := h.jwtManager.GenerateToken(user.ID, user.Email, "user", auth.AudienceApp)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "Failed to generate token")
 	}
@@ -117,7 +147,7 @@ func (h *AuthUsersHandler) SignIn(c *fiber.Ctx) error {
 	h.db.UpdateAuthUserLastSignIn(ctx, user.ID)
 
 	// Generate tokens
-	token, err := h.jwtManager.GenerateToken(user.ID, user.Email, "user")
+	token, err := h.jwtManager.GenerateToken(user.ID, user.Email, "user", auth.AudienceApp)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "Failed to generate token")
 	}
@@ -175,7 +205,7 @@ func (h *AuthUsersHandler) RefreshToken(c *fiber.Ctx) error {
 	h.db.DeleteAuthRefreshToken(ctx, req.RefreshToken)
 
 	// Generate new tokens
-	token, err := h.jwtManager.GenerateToken(user.ID, user.Email, "user")
+	token, err := h.jwtManager.GenerateToken(user.ID, user.Email, "user", auth.AudienceApp)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "Failed to generate token")
 	}
@@ -427,7 +457,7 @@ func (h *AuthUsersHandler) VerifyMagicLink(c *fiber.Ctx) error {
 	h.db.UpdateAuthUserLastSignIn(ctx, user.ID)
 
 	// Generate tokens
-	jwtToken, err := h.jwtManager.GenerateToken(user.ID, user.Email, "user")
+	jwtToken, err := h.jwtManager.GenerateToken(user.ID, user.Email, "user", auth.AudienceApp)
 	if err != nil {
 		return c.Redirect(redirect + "#error=token_generation_failed")
 	}

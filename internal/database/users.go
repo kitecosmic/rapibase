@@ -15,10 +15,10 @@ import (
 func (db *DB) GetUserByEmail(ctx context.Context, email string) (*models.User, error) {
 	var user models.User
 	err := db.Pool.QueryRow(ctx,
-		`SELECT id, email, password_hash, role, created_at, updated_at 
+		`SELECT id, email, password_hash, role, COALESCE(totp_secret,''), COALESCE(totp_enabled,false), created_at, updated_at
 		FROM _rapibase_users WHERE email = $1`,
 		email,
-	).Scan(&user.ID, &user.Email, &user.PasswordHash, &user.Role, &user.CreatedAt, &user.UpdatedAt)
+	).Scan(&user.ID, &user.Email, &user.PasswordHash, &user.Role, &user.TOTPSecret, &user.TOTPEnabled, &user.CreatedAt, &user.UpdatedAt)
 
 	if err != nil {
 		return nil, err
@@ -30,10 +30,10 @@ func (db *DB) GetUserByEmail(ctx context.Context, email string) (*models.User, e
 func (db *DB) GetUserByID(ctx context.Context, id int64) (*models.User, error) {
 	var user models.User
 	err := db.Pool.QueryRow(ctx,
-		`SELECT id, email, password_hash, role, created_at, updated_at 
+		`SELECT id, email, password_hash, role, COALESCE(totp_secret,''), COALESCE(totp_enabled,false), created_at, updated_at
 		FROM _rapibase_users WHERE id = $1`,
 		id,
-	).Scan(&user.ID, &user.Email, &user.PasswordHash, &user.Role, &user.CreatedAt, &user.UpdatedAt)
+	).Scan(&user.ID, &user.Email, &user.PasswordHash, &user.Role, &user.TOTPSecret, &user.TOTPEnabled, &user.CreatedAt, &user.UpdatedAt)
 
 	if err != nil {
 		return nil, err
@@ -60,6 +60,34 @@ func (db *DB) CreateUser(ctx context.Context, email, password string) (*models.U
 		return nil, err
 	}
 	return &user, nil
+}
+
+// SetUserTOTPSecret stores a pending TOTP secret (not yet enabled) for a
+// dashboard user, replacing any previous one.
+func (db *DB) SetUserTOTPSecret(ctx context.Context, userID int64, secret string) error {
+	_, err := db.Pool.Exec(ctx,
+		`UPDATE _rapibase_users SET totp_secret = $1, totp_enabled = false, updated_at = NOW() WHERE id = $2`,
+		secret, userID,
+	)
+	return err
+}
+
+// SetUserTOTPEnabled flips the enabled flag once a code has been verified.
+func (db *DB) SetUserTOTPEnabled(ctx context.Context, userID int64, enabled bool) error {
+	_, err := db.Pool.Exec(ctx,
+		`UPDATE _rapibase_users SET totp_enabled = $1, updated_at = NOW() WHERE id = $2`,
+		enabled, userID,
+	)
+	return err
+}
+
+// ClearUserTOTP removes MFA entirely for a user.
+func (db *DB) ClearUserTOTP(ctx context.Context, userID int64) error {
+	_, err := db.Pool.Exec(ctx,
+		`UPDATE _rapibase_users SET totp_secret = NULL, totp_enabled = false, updated_at = NOW() WHERE id = $1`,
+		userID,
+	)
+	return err
 }
 
 // VerifyPassword verifies a password against a hash

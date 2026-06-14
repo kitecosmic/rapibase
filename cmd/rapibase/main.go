@@ -15,6 +15,7 @@ import (
 	"github.com/joho/godotenv"
 
 	"github.com/rapibase/rapibase/internal/api"
+	"github.com/rapibase/rapibase/internal/api/middleware"
 	"github.com/rapibase/rapibase/internal/config"
 	"github.com/rapibase/rapibase/internal/database"
 )
@@ -38,6 +39,14 @@ func main() {
 		log.Fatalf("Failed to run migrations: %v", err)
 	}
 
+	// Finalize secrets: generate+persist any left blank, and refuse to
+	// boot if an operator explicitly configured a known weak default.
+	// Runs after Migrate (needs the _rapibase_secrets table) and before
+	// anything that consumes the keys.
+	if err := cfg.ResolveSecrets(context.Background(), db); err != nil {
+		log.Fatalf("Secret configuration error: %v", err)
+	}
+
 	// Create admin user if not exists
 	if err := db.CreateAdminIfNotExists(cfg.AdminEmail, cfg.AdminPassword); err != nil {
 		log.Printf("Warning: Could not create admin user: %v", err)
@@ -55,6 +64,10 @@ func main() {
 		BodyLimit:         5 * 1024 * 1024 * 1024,
 		StreamRequestBody: true,
 		ErrorHandler:      api.ErrorHandler,
+		// Behind Caddy/any reverse proxy the real client IP arrives in
+		// X-Forwarded-For; make c.IP() resolve to it so the access log
+		// records the actual caller, not the proxy.
+		ProxyHeader: fiber.HeaderXForwardedFor,
 	})
 
 	// Middleware
@@ -67,6 +80,14 @@ func main() {
 		AllowCredentials: true,
 	}))
 
+	// Access log: records every /api and /mcp request with the real
+	// client IP and caller identity. Registered before the routes so it
+	// wraps them; the DB writer goroutine is started further down.
+	accessLogger := middleware.NewAccessLogger(db, cfg.AccessLogRetentionDays)
+	if cfg.AccessLogEnabled {
+		app.Use(accessLogger.Middleware())
+	}
+
 	// Setup routes
 	_ = api.SetupRoutes(app, db, cfg)
 
@@ -76,8 +97,15 @@ func main() {
 	// blocks the rest of the API.
 	rtCtx, rtCancel := context.WithCancel(context.Background())
 	defer rtCancel()
+
+	// Start the access-log DB writer (flushes buffered entries, prunes
+	// old rows). Shares the realtime context so it stops on shutdown.
+	if cfg.AccessLogEnabled {
+		go accessLogger.Run(rtCtx)
+	}
+
 	if cfg.RealtimeEnabled {
-		startRealtime(rtCtx, app, cfg)
+		startRealtime(rtCtx, app, db, cfg)
 	} else {
 		log.Println("Realtime: disabled by REALTIME_ENABLED=false")
 	}
@@ -119,8 +147,8 @@ func main() {
 // failure (bad WAL config, missing slot creation rights, etc.) is
 // logged loudly but does not abort startup — the rest of the API
 // keeps working.
-func startRealtime(ctx context.Context, app *fiber.App, cfg *config.Config) {
-	svc, err := api.SetupRealtime(app, cfg)
+func startRealtime(ctx context.Context, app *fiber.App, db *database.DB, cfg *config.Config) {
+	svc, err := api.SetupRealtime(ctx, app, db, cfg)
 	if err != nil {
 		log.Printf("⚠️  Realtime: setup failed, endpoint disabled: %v", err)
 		return

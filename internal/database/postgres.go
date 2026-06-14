@@ -61,6 +61,13 @@ func (db *DB) Migrate() error {
 			updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 		)`,
 
+		// MFA (TOTP) for dashboard admins.
+		`DO $$ BEGIN
+			ALTER TABLE _rapibase_users ADD COLUMN IF NOT EXISTS totp_secret VARCHAR(64);
+			ALTER TABLE _rapibase_users ADD COLUMN IF NOT EXISTS totp_enabled BOOLEAN DEFAULT FALSE;
+		EXCEPTION WHEN others THEN NULL;
+		END $$`,
+
 		// Password reset tokens
 		`CREATE TABLE IF NOT EXISTS _rapibase_password_resets (
 			id BIGSERIAL PRIMARY KEY,
@@ -78,6 +85,44 @@ func (db *DB) Migrate() error {
 			token VARCHAR(255) UNIQUE NOT NULL,
 			expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
 			created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+		)`,
+
+		// Persisted secrets (auto-generated keys: jwt_secret, anon_key,
+		// service_key, admin_password). Lets rapibase generate strong
+		// secrets on first boot and keep them stable across restarts
+		// without any manual key management.
+		`CREATE TABLE IF NOT EXISTS _rapibase_secrets (
+			key VARCHAR(64) PRIMARY KEY,
+			value TEXT NOT NULL,
+			created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+			updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+		)`,
+
+		// Access log: one row per API request (IP, identity, status).
+		`CREATE TABLE IF NOT EXISTS _rapibase_access_log (
+			id BIGSERIAL PRIMARY KEY,
+			ts TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+			ip VARCHAR(64),
+			method VARCHAR(10),
+			path TEXT,
+			status INT,
+			latency_ms BIGINT,
+			key_type VARCHAR(20),
+			user_id TEXT,
+			user_role VARCHAR(50),
+			user_agent TEXT
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_access_log_ts ON _rapibase_access_log(ts DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_access_log_ip ON _rapibase_access_log(ip)`,
+
+		// RLS config registry: which tables have row-level security and
+		// in which mode. Maintained by SetTableRLS/DisableTableRLS and
+		// read by the realtime layer to mirror REST authorization.
+		`CREATE TABLE IF NOT EXISTS _rapibase_rls (
+			table_name VARCHAR(63) PRIMARY KEY,
+			mode VARCHAR(20) NOT NULL,
+			owner_column VARCHAR(63),
+			updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 		)`,
 
 		// Indexes for internal tables
@@ -243,6 +288,55 @@ func (db *DB) Migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_storage_objects_owner ON storage_objects(owner)`,
 		`CREATE INDEX IF NOT EXISTS idx_storage_objects_name ON storage_objects(name)`,
 		`CREATE INDEX IF NOT EXISTS idx_storage_objects_path ON storage_objects USING GIN(path_tokens)`,
+
+		// ============================================
+		// ROW-LEVEL SECURITY (RLS) bootstrap
+		// ============================================
+		// Low-privilege roles the public API switches into per request.
+		// Wrapped so a managed Postgres without CREATEROLE logs a clear
+		// warning instead of aborting startup — the public API then
+		// fails closed until the roles are provisioned by an operator.
+		`DO $$
+		BEGIN
+			IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rapibase_authenticated') THEN
+				CREATE ROLE rapibase_authenticated NOLOGIN NOINHERIT;
+			END IF;
+			IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'rapibase_anon') THEN
+				CREATE ROLE rapibase_anon NOLOGIN NOINHERIT;
+			END IF;
+		EXCEPTION WHEN insufficient_privilege THEN
+			RAISE WARNING 'rapibase: cannot create RLS roles (need CREATEROLE/superuser); public API will fail closed until provisioned';
+		END $$`,
+
+		// Let the connecting (pooled) role SET ROLE into them and give
+		// the roles schema usage. No table privileges are granted here:
+		// tables are opt-in via EnableTableRLS, so the default is deny.
+		`DO $$
+		BEGIN
+			EXECUTE format('GRANT rapibase_authenticated TO %I', current_user);
+			EXECUTE format('GRANT rapibase_anon TO %I', current_user);
+			GRANT USAGE ON SCHEMA public TO rapibase_authenticated, rapibase_anon;
+		EXCEPTION WHEN OTHERS THEN
+			RAISE WARNING 'rapibase: cannot wire RLS roles to %: %', current_user, SQLERRM;
+		END $$`,
+
+		// auth.* helpers expose the request JWT claims to RLS policies,
+		// mirroring the well-known Supabase functions. EXECUTE on
+		// functions and the schema is available to all roles.
+		`CREATE SCHEMA IF NOT EXISTS auth`,
+		`GRANT USAGE ON SCHEMA auth TO PUBLIC`,
+		`CREATE OR REPLACE FUNCTION auth.jwt() RETURNS jsonb LANGUAGE sql STABLE AS $$
+			SELECT COALESCE(NULLIF(current_setting('request.jwt.claims', true), ''), '{}')::jsonb
+		$$`,
+		`CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $$
+			SELECT NULLIF(auth.jwt() ->> 'sub', '')::uuid
+		$$`,
+		`CREATE OR REPLACE FUNCTION auth.role() RETURNS text LANGUAGE sql STABLE AS $$
+			SELECT COALESCE(auth.jwt() ->> 'role', 'anon')
+		$$`,
+		`CREATE OR REPLACE FUNCTION auth.email() RETURNS text LANGUAGE sql STABLE AS $$
+			SELECT auth.jwt() ->> 'email'
+		$$`,
 	}
 
 	for _, migration := range migrations {

@@ -114,6 +114,62 @@ func (h *TablesHandler) DropTable(c *fiber.Ctx) error {
 	})
 }
 
+// RLSStatus reports whether row-level security is enabled/forced on a
+// table and which policies exist (admin panel).
+func (h *TablesHandler) RLSStatus(c *fiber.Ctx) error {
+	tableName := c.Params("name")
+	if tableName == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Table name is required"})
+	}
+	status, err := h.db.GetTableRLSStatus(c.Context(), tableName)
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": err.Error()})
+	}
+	return c.JSON(status)
+}
+
+// EnableRLS turns on row-level security for a table in one of three
+// modes (default "owner"):
+//   - owner:         body.owner_column (uuid) must equal auth.uid()
+//   - authenticated: any logged-in user can read/write all rows
+//   - public:        anyone can read; logged-in users can write
+func (h *TablesHandler) EnableRLS(c *fiber.Ctx) error {
+	tableName := c.Params("name")
+	if tableName == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Table name is required"})
+	}
+	var req struct {
+		Mode        string `json:"mode"`
+		OwnerColumn string `json:"owner_column"`
+	}
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+	if req.Mode == "" {
+		req.Mode = database.RLSModeOwner
+	}
+	if req.Mode == database.RLSModeOwner && req.OwnerColumn == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "owner_column is required for owner mode (the uuid column holding the owning user id)"})
+	}
+	if err := h.db.SetTableRLS(c.Context(), tableName, req.Mode, req.OwnerColumn); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+	}
+	return c.JSON(fiber.Map{"message": "RLS enabled", "table": tableName, "mode": req.Mode, "owner_column": req.OwnerColumn})
+}
+
+// DisableRLS removes the owner policies and turns RLS off for a table.
+// The public API then fails closed for it until re-enabled.
+func (h *TablesHandler) DisableRLS(c *fiber.Ctx) error {
+	tableName := c.Params("name")
+	if tableName == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Table name is required"})
+	}
+	if err := h.db.DisableTableRLS(c.Context(), tableName); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+	}
+	return c.JSON(fiber.Map{"message": "RLS disabled", "table": tableName})
+}
+
 // GetRows returns paginated rows from a table
 func (h *TablesHandler) GetRows(c *fiber.Ctx) error {
 	tableName := c.Params("name")
@@ -158,7 +214,7 @@ func (h *TablesHandler) GetRows(c *fiber.Ctx) error {
 		}
 	})
 
-	result, err := h.db.GetRows(c.Context(), tableName, params)
+	result, err := h.db.GetRows(c.UserContext(), tableName, params)
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": err.Error(),
@@ -184,7 +240,7 @@ func (h *TablesHandler) InsertRow(c *fiber.Ctx) error {
 		})
 	}
 
-	row, err := h.db.InsertRow(c.Context(), tableName, data)
+	row, err := h.db.InsertRow(c.UserContext(), tableName, data)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error": err.Error(),
@@ -220,10 +276,10 @@ func (h *TablesHandler) UpdateRow(c *fiber.Ctx) error {
 	// Get old data BEFORE update for webhook
 	var oldData map[string]interface{}
 	if h.webhookDispatcher != nil {
-		oldData, _ = h.db.GetRowByID(c.Context(), tableName, id)
+		oldData, _ = h.db.GetRowByID(c.UserContext(), tableName, id)
 	}
 
-	row, err := h.db.UpdateRow(c.Context(), tableName, id, data)
+	row, err := h.db.UpdateRow(c.UserContext(), tableName, id, data)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error": err.Error(),
@@ -252,10 +308,10 @@ func (h *TablesHandler) DeleteRow(c *fiber.Ctx) error {
 	// Get row data before deletion for webhook
 	var deletedData map[string]interface{}
 	if h.webhookDispatcher != nil {
-		deletedData, _ = h.db.GetRowByID(c.Context(), tableName, id)
+		deletedData, _ = h.db.GetRowByID(c.UserContext(), tableName, id)
 	}
 
-	if err := h.db.DeleteRow(c.Context(), tableName, id); err != nil {
+	if err := h.db.DeleteRow(c.UserContext(), tableName, id); err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error": err.Error(),
 		})

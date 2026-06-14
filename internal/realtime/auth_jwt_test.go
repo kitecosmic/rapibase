@@ -15,7 +15,7 @@ func newJWT(t *testing.T) *auth.JWTManager {
 
 func issueToken(t *testing.T, jwt *auth.JWTManager, userID, role string) string {
 	t.Helper()
-	tok, err := jwt.GenerateToken(userID, userID+"@example.com", role)
+	tok, err := jwt.GenerateToken(userID, userID+"@example.com", role, auth.AudienceApp)
 	if err != nil {
 		t.Fatal(err)
 	}

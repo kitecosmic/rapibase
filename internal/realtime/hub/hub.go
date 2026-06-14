@@ -42,6 +42,11 @@ type Config struct {
 	// Required.
 	Permissions filter.PermissionChecker
 
+	// RowAuth optionally restricts which subscribers receive each event
+	// by row ownership, mirroring REST row-level security. Nil means no
+	// per-row filtering (events flow as before for non-RLS tables).
+	RowAuth RowAuthorizer
+
 	// Metrics is the observability sink. Defaults to NoOp.
 	Metrics metrics.Recorder
 

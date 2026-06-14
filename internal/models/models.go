@@ -8,6 +8,8 @@ type User struct {
 	Email        string    `json:"email"`
 	PasswordHash string    `json:"-"`
 	Role         string    `json:"role"` // admin, user
+	TOTPSecret   string    `json:"-"`
+	TOTPEnabled  bool      `json:"totp_enabled"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 }
@@ -120,6 +122,7 @@ type PaginatedResponse struct {
 type AuthRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
+	TOTPCode string `json:"totp_code,omitempty"`
 }
 
 // AuthResponse represents authentication response

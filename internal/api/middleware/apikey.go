@@ -1,11 +1,13 @@
 package middleware
 
 import (
+	"encoding/json"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/rapibase/rapibase/internal/auth"
 	"github.com/rapibase/rapibase/internal/config"
+	"github.com/rapibase/rapibase/internal/database"
 )
 
 type APIKeyMiddleware struct {
@@ -56,7 +58,7 @@ func (m *APIKeyMiddleware) RequireAPIKey() fiber.Handler {
 			}
 
 			token := parts[1]
-			claims, err := m.jwtManager.ValidateToken(token)
+			claims, err := m.jwtManager.ValidateToken(token, auth.AudienceApp)
 			if err != nil {
 				return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
 					"error": "Invalid or expired token",
@@ -67,6 +69,21 @@ func (m *APIKeyMiddleware) RequireAPIKey() fiber.Handler {
 			c.Locals("userID", claims.UserID)
 			c.Locals("userEmail", claims.Email)
 			c.Locals("userRole", claims.Role)
+
+			// Enforce row-level security for authenticated app users:
+			// downstream data queries run as rapibase_authenticated with
+			// these claims exposed to Postgres (so policies using
+			// auth.uid() apply). The service key path does NOT set this
+			// and keeps full access.
+			claimsJSON, _ := json.Marshal(map[string]string{
+				"sub":   claims.UserID,
+				"role":  claims.Role,
+				"email": claims.Email,
+			})
+			c.SetUserContext(database.WithAuth(c.Context(), database.AuthContext{
+				Enforce:    true,
+				ClaimsJSON: string(claimsJSON),
+			}))
 
 			return c.Next()
 		}

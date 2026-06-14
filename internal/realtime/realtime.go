@@ -40,6 +40,10 @@ type Config struct {
 	// projection.
 	Permissions filter.PermissionChecker
 
+	// RowAuth optionally restricts which subscribers receive each event
+	// by row ownership, mirroring REST RLS. Nil = no per-row filtering.
+	RowAuth hub.RowAuthorizer
+
 	// Auth validates the apikey + JWT presented at the handshake.
 	Auth transport.AuthValidator
 
@@ -85,6 +89,7 @@ func New(cfg Config) (*Service, error) {
 	}
 
 	cfg.Hub.Permissions = cfg.Permissions
+	cfg.Hub.RowAuth = cfg.RowAuth
 	cfg.Hub.Metrics = cfg.Metrics
 	h := hub.New(cfg.Hub, cfg.Bus)
 	inv := rpc.NewInvoker(cfg.RPC, 0)

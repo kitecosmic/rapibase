@@ -47,7 +47,7 @@ func (v *JWTAuthValidator) Validate(apiKey, token string) (string, string, error
 	switch apiKey {
 	case v.serviceKey:
 		if token != "" {
-			if claims, err := v.jwt.ValidateToken(token); err == nil {
+			if claims, err := v.jwt.ValidateToken(token, auth.AudienceApp); err == nil {
 				return RoleService, claims.UserID, nil
 			}
 			// An invalid token presented alongside the service key is
@@ -61,7 +61,7 @@ func (v *JWTAuthValidator) Validate(apiKey, token string) (string, string, error
 		if token == "" {
 			return RoleAnon, "", nil
 		}
-		claims, err := v.jwt.ValidateToken(token)
+		claims, err := v.jwt.ValidateToken(token, auth.AudienceApp)
 		if err != nil {
 			return "", "", errors.New("invalid token")
 		}

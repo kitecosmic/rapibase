@@ -155,7 +155,7 @@ func (h *QueryHandler) CallRPC(c *fiber.Ctx) error {
 		}
 	}
 
-	data, err := h.db.CallFunction(c.Context(), name, args)
+	data, err := h.db.CallFunction(c.UserContext(), name, args)
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error": err.Error(),

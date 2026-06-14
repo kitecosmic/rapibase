@@ -11,8 +11,20 @@ import (
 	"github.com/rapibase/rapibase/internal/models"
 )
 
-// GetRows returns paginated rows from a table
+// GetRows returns paginated rows from a table. It runs under row-level
+// security when the context carries an authenticated app user, and with
+// full access for the service key / admin dashboard.
 func (db *DB) GetRows(ctx context.Context, tableName string, params models.PaginationParams) (*models.PaginatedResponse, error) {
+	var res *models.PaginatedResponse
+	err := db.runData(ctx, func(q Querier) error {
+		var e error
+		res, e = getRows(ctx, q, tableName, params)
+		return e
+	})
+	return res, err
+}
+
+func getRows(ctx context.Context, q Querier, tableName string, params models.PaginationParams) (*models.PaginatedResponse, error) {
 	if !isValidIdentifier(tableName) {
 		return nil, fmt.Errorf("invalid table name")
 	}
@@ -72,7 +84,7 @@ func (db *DB) GetRows(ctx context.Context, tableName string, params models.Pagin
 	// Get total count (with filters)
 	var totalRows int64
 	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s%s", quoteIdentifier(tableName), whereSQL)
-	if err := db.Pool.QueryRow(ctx, countQuery, queryArgs...).Scan(&totalRows); err != nil {
+	if err := q.QueryRow(ctx, countQuery, queryArgs...).Scan(&totalRows); err != nil {
 		return nil, err
 	}
 
@@ -85,7 +97,7 @@ func (db *DB) GetRows(ctx context.Context, tableName string, params models.Pagin
 
 	query += fmt.Sprintf(" LIMIT %d OFFSET %d", params.PageSize, offset)
 
-	rows, err := db.Pool.Query(ctx, query, queryArgs...)
+	rows, err := q.Query(ctx, query, queryArgs...)
 	if err != nil {
 		return nil, err
 	}
@@ -176,8 +188,18 @@ func buildFilterClause(filter models.FilterCondition, argIndex int) (string, []i
 	}
 }
 
-// InsertRow inserts a new row into a table
+// InsertRow inserts a new row into a table (RLS-aware).
 func (db *DB) InsertRow(ctx context.Context, tableName string, data map[string]interface{}) (map[string]interface{}, error) {
+	var res map[string]interface{}
+	err := db.runData(ctx, func(q Querier) error {
+		var e error
+		res, e = insertRow(ctx, q, tableName, data)
+		return e
+	})
+	return res, err
+}
+
+func insertRow(ctx context.Context, q Querier, tableName string, data map[string]interface{}) (map[string]interface{}, error) {
 	if !isValidIdentifier(tableName) {
 		return nil, fmt.Errorf("invalid table name")
 	}
@@ -204,7 +226,7 @@ func (db *DB) InsertRow(ctx context.Context, tableName string, data map[string]i
 		strings.Join(placeholders, ", "),
 	)
 
-	rows, err := db.Pool.Query(ctx, query, values...)
+	rows, err := q.Query(ctx, query, values...)
 	if err != nil {
 		return nil, err
 	}
@@ -222,13 +244,14 @@ func (db *DB) InsertRow(ctx context.Context, tableName string, data map[string]i
 	return results[0], nil
 }
 
-// GetRowByID returns a single row by its primary key
+// GetRowByID returns a single row by its primary key (RLS-aware).
 func (db *DB) GetRowByID(ctx context.Context, tableName string, id interface{}) (map[string]interface{}, error) {
 	if !isValidIdentifier(tableName) {
 		return nil, fmt.Errorf("invalid table name")
 	}
 
-	// Get primary key column
+	// Primary-key lookup uses the privileged pool: it reads catalog
+	// metadata (not row data), so it stays out of the RLS transaction.
 	schema, err := db.GetTableSchema(ctx, tableName)
 	if err != nil {
 		return nil, err
@@ -237,13 +260,23 @@ func (db *DB) GetRowByID(ctx context.Context, tableName string, id interface{}) 
 		return nil, fmt.Errorf("table has no primary key")
 	}
 
+	var res map[string]interface{}
+	err = db.runData(ctx, func(q Querier) error {
+		var e error
+		res, e = getRowByID(ctx, q, tableName, schema.PrimaryKey, id)
+		return e
+	})
+	return res, err
+}
+
+func getRowByID(ctx context.Context, q Querier, tableName, pk string, id interface{}) (map[string]interface{}, error) {
 	query := fmt.Sprintf(
 		"SELECT * FROM %s WHERE %s = $1",
 		quoteIdentifier(tableName),
-		quoteIdentifier(schema.PrimaryKey),
+		quoteIdentifier(pk),
 	)
 
-	rows, err := db.Pool.Query(ctx, query, id)
+	rows, err := q.Query(ctx, query, id)
 	if err != nil {
 		return nil, err
 	}
@@ -261,13 +294,12 @@ func (db *DB) GetRowByID(ctx context.Context, tableName string, id interface{}) 
 	return results[0], nil
 }
 
-// UpdateRow updates a row in a table
+// UpdateRow updates a row in a table (RLS-aware).
 func (db *DB) UpdateRow(ctx context.Context, tableName string, id interface{}, data map[string]interface{}) (map[string]interface{}, error) {
 	if !isValidIdentifier(tableName) {
 		return nil, fmt.Errorf("invalid table name")
 	}
 
-	// Get primary key column
 	schema, err := db.GetTableSchema(ctx, tableName)
 	if err != nil {
 		return nil, err
@@ -276,6 +308,16 @@ func (db *DB) UpdateRow(ctx context.Context, tableName string, id interface{}, d
 		return nil, fmt.Errorf("table has no primary key")
 	}
 
+	var res map[string]interface{}
+	err = db.runData(ctx, func(q Querier) error {
+		var e error
+		res, e = updateRow(ctx, q, tableName, schema.PrimaryKey, id, data)
+		return e
+	})
+	return res, err
+}
+
+func updateRow(ctx context.Context, q Querier, tableName, pk string, id interface{}, data map[string]interface{}) (map[string]interface{}, error) {
 	var setClauses []string
 	var values []interface{}
 	i := 1
@@ -295,11 +337,11 @@ func (db *DB) UpdateRow(ctx context.Context, tableName string, id interface{}, d
 		"UPDATE %s SET %s WHERE %s = $%d RETURNING *",
 		quoteIdentifier(tableName),
 		strings.Join(setClauses, ", "),
-		quoteIdentifier(schema.PrimaryKey),
+		quoteIdentifier(pk),
 		i,
 	)
 
-	rows, err := db.Pool.Query(ctx, query, values...)
+	rows, err := q.Query(ctx, query, values...)
 	if err != nil {
 		return nil, err
 	}
@@ -317,7 +359,7 @@ func (db *DB) UpdateRow(ctx context.Context, tableName string, id interface{}, d
 	return results[0], nil
 }
 
-// DeleteRow deletes a row from a table
+// DeleteRow deletes a row from a table (RLS-aware).
 func (db *DB) DeleteRow(ctx context.Context, tableName string, id interface{}) error {
 	if !isValidIdentifier(tableName) {
 		return fmt.Errorf("invalid table name")
@@ -331,13 +373,19 @@ func (db *DB) DeleteRow(ctx context.Context, tableName string, id interface{}) e
 		return fmt.Errorf("table has no primary key")
 	}
 
+	return db.runData(ctx, func(q Querier) error {
+		return deleteRow(ctx, q, tableName, schema.PrimaryKey, id)
+	})
+}
+
+func deleteRow(ctx context.Context, q Querier, tableName, pk string, id interface{}) error {
 	query := fmt.Sprintf(
 		"DELETE FROM %s WHERE %s = $1",
 		quoteIdentifier(tableName),
-		quoteIdentifier(schema.PrimaryKey),
+		quoteIdentifier(pk),
 	)
 
-	result, err := db.Pool.Exec(ctx, query, id)
+	result, err := q.Exec(ctx, query, id)
 	if err != nil {
 		return err
 	}
@@ -352,8 +400,19 @@ func (db *DB) DeleteRow(ctx context.Context, tableName string, id interface{}) e
 // CallFunction invokes a Postgres function with named arguments and
 // returns the resulting rows. Argument names are validated as SQL
 // identifiers; values are bound via $N placeholders so they cannot
-// inject SQL. Functions with no args accept a nil or empty map.
+// inject SQL. Functions with no args accept a nil or empty map. Runs
+// under RLS for authenticated app users.
 func (db *DB) CallFunction(ctx context.Context, name string, args map[string]interface{}) ([]map[string]interface{}, error) {
+	var res []map[string]interface{}
+	err := db.runData(ctx, func(q Querier) error {
+		var e error
+		res, e = callFunction(ctx, q, name, args)
+		return e
+	})
+	return res, err
+}
+
+func callFunction(ctx context.Context, q Querier, name string, args map[string]interface{}) ([]map[string]interface{}, error) {
 	if !isValidIdentifier(name) {
 		return nil, fmt.Errorf("invalid function name")
 	}
@@ -372,7 +431,7 @@ func (db *DB) CallFunction(ctx context.Context, name string, args map[string]int
 
 	query := fmt.Sprintf("SELECT * FROM %s(%s)", quoteIdentifier(name), strings.Join(argPairs, ", "))
 
-	rows, err := db.Pool.Query(ctx, query, values...)
+	rows, err := q.Query(ctx, query, values...)
 	if err != nil {
 		return nil, err
 	}
@@ -381,7 +440,9 @@ func (db *DB) CallFunction(ctx context.Context, name string, args map[string]int
 	return pgxRowsToMaps(rows)
 }
 
-// ExecuteQuery executes a raw SQL query
+// ExecuteQuery executes a raw SQL query. This powers the admin-only
+// dashboard SQL console and always runs with full privileges — it is
+// never exposed on the public API surface.
 func (db *DB) ExecuteQuery(ctx context.Context, sql string, params []interface{}) (*models.QueryResult, error) {
 	start := time.Now()
 

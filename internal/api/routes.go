@@ -56,10 +56,17 @@ func SetupRoutes(app *fiber.App, db *database.DB, cfg *config.Config) *WebhookDi
 	dashboardAuth.Post("/forgot-password", rateLimiter.Limit(), authHandler.ForgotPassword)
 	dashboardAuth.Post("/reset-password", rateLimiter.Limit(), authHandler.ResetPassword)
 	dashboardAuth.Post("/refresh", authHandler.RefreshToken)
-	dashboardAuth.Get("/me", authMiddleware.RequireAuth(), authHandler.Me)
+	dashboardAuth.Get("/me", authMiddleware.RequireAdmin(), authHandler.Me)
+
+	// MFA (TOTP) enrollment/management — admin only
+	mfa := dashboardAuth.Group("/mfa", authMiddleware.RequireAdmin())
+	mfa.Get("/status", authHandler.MFAStatus)
+	mfa.Post("/setup", authHandler.MFASetup)
+	mfa.Post("/verify", authHandler.MFAVerify)
+	mfa.Post("/disable", authHandler.MFADisable)
 
 	// Project info endpoint (returns API keys for dashboard)
-	dashboard.Get("/project", authMiddleware.RequireAuth(), func(c *fiber.Ctx) error {
+	dashboard.Get("/project", authMiddleware.RequireAdmin(), func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{
 			"anon_key":    cfg.AnonKey,
 			"service_key": cfg.ServiceKey,
@@ -119,7 +126,7 @@ func SetupRoutes(app *fiber.App, db *database.DB, cfg *config.Config) *WebhookDi
 	// ============================================
 	// DASHBOARD - Protected routes (require admin JWT)
 	// ============================================
-	protected := dashboard.Group("", authMiddleware.RequireAuth())
+	protected := dashboard.Group("", authMiddleware.RequireAdmin())
 
 	// Tables routes
 	protected.Get("/tables", tablesHandler.ListTables)
@@ -127,11 +134,33 @@ func SetupRoutes(app *fiber.App, db *database.DB, cfg *config.Config) *WebhookDi
 	protected.Get("/tables/:name", tablesHandler.GetTableSchema)
 	protected.Delete("/tables/:name", tablesHandler.DropTable)
 
+	// Row-level security management (admin panel)
+	protected.Get("/tables/:name/rls", tablesHandler.RLSStatus)
+	protected.Post("/tables/:name/rls", tablesHandler.EnableRLS)
+	protected.Delete("/tables/:name/rls", tablesHandler.DisableRLS)
+
 	// Rows routes (admin panel)
 	protected.Get("/tables/:name/rows", tablesHandler.GetRows)
 	protected.Post("/tables/:name/rows", tablesHandler.InsertRow)
 	protected.Put("/tables/:name/rows/:id", tablesHandler.UpdateRow)
 	protected.Delete("/tables/:name/rows/:id", tablesHandler.DeleteRow)
+
+	// Access log (admin panel: who hit what, from which IP)
+	protected.Get("/access-logs", func(c *fiber.Ctx) error {
+		logs, err := db.ListAccessLogs(
+			c.Context(),
+			c.QueryInt("limit", 100),
+			c.QueryInt("offset", 0),
+			c.Query("ip"),
+		)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+		}
+		if logs == nil {
+			logs = []map[string]interface{}{}
+		}
+		return c.JSON(fiber.Map{"logs": logs})
+	})
 
 	// Query routes
 	protected.Post("/query", queryHandler.ExecuteQuery)

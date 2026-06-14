@@ -34,7 +34,7 @@ func (m *AuthMiddleware) RequireAuth() fiber.Handler {
 		}
 
 		token := parts[1]
-		claims, err := m.jwt.ValidateToken(token)
+		claims, err := m.jwt.ValidateToken(token, auth.AudienceDashboard)
 		if err != nil {
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
 				"error": "Invalid or expired token",
@@ -69,7 +69,7 @@ func (m *AuthMiddleware) RequireAdmin() fiber.Handler {
 		}
 
 		token := parts[1]
-		claims, err := m.jwt.ValidateToken(token)
+		claims, err := m.jwt.ValidateToken(token, auth.AudienceDashboard)
 		if err != nil {
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
 				"error": "Invalid or expired token",
@@ -105,7 +105,7 @@ func (m *AuthMiddleware) OptionalAuth() fiber.Handler {
 		}
 
 		token := parts[1]
-		claims, err := m.jwt.ValidateToken(token)
+		claims, err := m.jwt.ValidateToken(token, auth.AudienceDashboard)
 		if err != nil {
 			return c.Next()
 		}

@@ -28,6 +28,44 @@ func NewStorageHandler(storageClient *storage.Client, db *database.DB, cfg *conf
 	}
 }
 
+// ---- Public storage API authorization helpers ----
+//
+// The dashboard storage routes are admin-only and unrestricted. The
+// public API routes (the *API handlers below) are reached with the anon
+// key + a user JWT, or the service key. These helpers scope anon access
+// to the caller's own objects; the service key keeps full access.
+
+func storageIsService(c *fiber.Ctx) bool { return c.Locals("apiKeyType") == "service" }
+
+func storageCallerID(c *fiber.Ctx) string {
+	s, _ := c.Locals("userID").(string)
+	return s
+}
+
+// authorizeObject reports whether the caller may access a specific
+// object. Service key: always. Otherwise the caller must own the object;
+// for reads (write=false) a public bucket is also allowed. An object
+// with no DB record / no owner is treated as private (deny) for
+// non-service callers — uploads via the public API always record an
+// owner, so unowned objects are admin/legacy and must not leak.
+func (h *StorageHandler) authorizeObject(ctx context.Context, c *fiber.Ctx, bucket, key string, write bool) bool {
+	if storageIsService(c) {
+		return true
+	}
+	caller := storageCallerID(c)
+
+	obj, err := h.db.GetStorageObject(ctx, bucket, key)
+	if err == nil && obj.Owner != nil && *obj.Owner != "" && *obj.Owner == caller && caller != "" {
+		return true
+	}
+	if !write {
+		if b, berr := h.db.GetStorageBucket(ctx, bucket); berr == nil && b.Public {
+			return true
+		}
+	}
+	return false
+}
+
 func (h *StorageHandler) ListBuckets(c *fiber.Ctx) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -467,6 +505,16 @@ func (h *StorageHandler) UploadObjectAPI(c *fiber.Ctx) error {
 	ownerID := c.FormValue("owner_id", "")
 	metadataStr := c.FormValue("metadata", "{}")
 
+	// The public API records the authenticated user as the owner; a
+	// client cannot claim someone else's id. The service key may set any
+	// owner (or none) for backend automations.
+	if !storageIsService(c) {
+		ownerID = storageCallerID(c)
+		if ownerID == "" {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Authentication required to upload"})
+		}
+	}
+
 	file, err := c.FormFile("file")
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
@@ -543,17 +591,35 @@ func (h *StorageHandler) ListObjectsAPI(c *fiber.Ctx) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	objects, err := h.storage.ListObjects(ctx, bucket, prefix)
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-			"error": err.Error(),
-		})
+	// Service key: full bucket listing (unchanged). Anon: scope to the
+	// caller's own objects, or the whole bucket only if it is public.
+	if storageIsService(c) {
+		objects, err := h.storage.ListObjects(ctx, bucket, prefix)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+		}
+		return c.JSON(fiber.Map{"objects": objects, "prefix": prefix})
 	}
 
-	return c.JSON(fiber.Map{
-		"objects": objects,
-		"prefix":  prefix,
-	})
+	if b, err := h.db.GetStorageBucket(ctx, bucket); err == nil && b.Public {
+		objs, err := h.db.ListStorageObjects(ctx, bucket, prefix, 1000)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+		}
+		if objs == nil {
+			objs = []database.StorageObject{}
+		}
+		return c.JSON(fiber.Map{"objects": objs, "prefix": prefix})
+	}
+
+	objs, err := h.db.ListStorageObjectsByOwnerBucket(ctx, storageCallerID(c), bucket, prefix, 1000)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+	}
+	if objs == nil {
+		objs = []database.StorageObject{}
+	}
+	return c.JSON(fiber.Map{"objects": objs, "prefix": prefix})
 }
 
 func (h *StorageHandler) GetObjectAPI(c *fiber.Ctx) error {
@@ -562,6 +628,10 @@ func (h *StorageHandler) GetObjectAPI(c *fiber.Ctx) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
+
+	if !h.authorizeObject(ctx, c, bucket, key, false) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Forbidden"})
+	}
 
 	obj, stat, err := h.storage.GetObject(ctx, bucket, key)
 	if err != nil {
@@ -592,6 +662,10 @@ func (h *StorageHandler) DeleteObjectAPI(c *fiber.Ctx) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	if !h.authorizeObject(ctx, c, bucket, key, true) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Forbidden"})
+	}
+
 	if err := h.storage.DeleteObject(ctx, bucket, key); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": err.Error(),
@@ -606,9 +680,14 @@ func (h *StorageHandler) DeleteObjectAPI(c *fiber.Ctx) error {
 	})
 }
 
-// ListObjectsByOwner returns all files owned by a specific user
+// ListObjectsByOwner returns all files owned by a specific user. A
+// non-service caller can only list their own files, regardless of the
+// owner_id in the path.
 func (h *StorageHandler) ListObjectsByOwner(c *fiber.Ctx) error {
 	ownerID := c.Params("owner_id")
+	if !storageIsService(c) {
+		ownerID = storageCallerID(c)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -648,6 +727,18 @@ func (h *StorageHandler) SearchObjectsByMetadata(c *fiber.Ctx) error {
 		})
 	}
 
+	// Anon callers only see their own matches.
+	if !storageIsService(c) {
+		caller := storageCallerID(c)
+		owned := make([]database.StorageObject, 0, len(objects))
+		for _, o := range objects {
+			if caller != "" && o.Owner != nil && *o.Owner == caller {
+				owned = append(owned, o)
+			}
+		}
+		objects = owned
+	}
+
 	return c.JSON(fiber.Map{
 		"objects": objects,
 		"filter": fiber.Map{
@@ -664,6 +755,10 @@ func (h *StorageHandler) GetObjectMetadata(c *fiber.Ctx) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+
+	if !h.authorizeObject(ctx, c, bucket, key, false) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Forbidden"})
+	}
 
 	obj, err := h.db.GetStorageObject(ctx, bucket, key)
 	if err != nil {
@@ -692,6 +787,10 @@ func (h *StorageHandler) UpdateObjectMetadata(c *fiber.Ctx) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+
+	if !h.authorizeObject(ctx, c, bucket, key, true) {
+		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Forbidden"})
+	}
 
 	if err := h.db.UpdateStorageObjectMetadata(ctx, bucket, key, body.Metadata); err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{

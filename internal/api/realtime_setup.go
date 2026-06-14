@@ -10,13 +10,16 @@
 package api
 
 import (
+	"context"
 	"fmt"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/adaptor"
 
 	"github.com/rapibase/rapibase/internal/auth"
 	"github.com/rapibase/rapibase/internal/config"
+	"github.com/rapibase/rapibase/internal/database"
 	"github.com/rapibase/rapibase/internal/realtime"
 	"github.com/rapibase/rapibase/internal/realtime/bus"
 	"github.com/rapibase/rapibase/internal/realtime/hub"
@@ -35,9 +38,14 @@ import (
 // same way they consume the REST API at /api/v1/*. Putting it under
 // /dashboard would suggest it is only for the admin UI, which it is
 // not.
-func SetupRealtime(app *fiber.App, cfg *config.Config) (*realtime.Service, error) {
+func SetupRealtime(ctx context.Context, app *fiber.App, db *database.DB, cfg *config.Config) (*realtime.Service, error) {
 	jwtManager := auth.NewJWTManagerWithExpiry(cfg.JWTSecret, cfg.JWTExpiry)
 	authValidator := realtime.NewJWTAuthValidator(jwtManager, cfg.AnonKey, cfg.ServiceKey)
+
+	// Mirror REST row-level security on the realtime channel: events for
+	// RLS-managed tables are scoped to the owning subscriber. Tables
+	// without RLS config are unaffected, so realtime keeps working.
+	rowAuth := newRLSRowAuthorizer(ctx, db, 30*time.Second)
 
 	// Single-node bus by default. Multi-node deployments swap this for
 	// bus.NewNATS once that implementation is wired.
@@ -69,6 +77,7 @@ func SetupRealtime(app *fiber.App, cfg *config.Config) (*realtime.Service, error
 			ServerVersion:       "1.0.0",
 		},
 		Permissions: realtime.PermissiveChecker{},
+		RowAuth:     rowAuth,
 		Auth:        authValidator,
 		RPC:         rpc.NewRegistry(),
 		Bus:         eventBus,

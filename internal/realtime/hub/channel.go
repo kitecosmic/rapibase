@@ -178,6 +178,12 @@ func (c *Channel) deliverEvent(ev wal.Event, only *Subscriber) {
 			if !s.pred(row) {
 				continue
 			}
+			// Row-level security: mirror REST ownership on the realtime
+			// channel. Nil RowAuth (or a table with no RLS config) lets
+			// the event through unchanged.
+			if c.cfg.RowAuth != nil && !c.cfg.RowAuth.Authorize(sub.Role(), sub.UserID(), ev.Schema, ev.Table, authRow(ev)) {
+				continue
+			}
 			frame, ok := c.buildEventFrame(sub, ev, s)
 			if !ok {
 				continue
@@ -456,6 +462,19 @@ func rowForEval(ev wal.Event) filter.Row {
 		}
 	}
 	return wal.Row{}
+}
+
+// authRow returns the row image the RowAuthorizer should inspect: the
+// new image for INSERT/UPDATE, the old image for DELETE (which is where
+// the owner column lives on a delete).
+func authRow(ev wal.Event) map[string]any {
+	if ev.Type == protocol.EventDelete {
+		return ev.Old
+	}
+	if ev.New != nil {
+		return ev.New
+	}
+	return ev.Old
 }
 
 // defaultColumns returns the sorted union of every column present in

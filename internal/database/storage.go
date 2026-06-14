@@ -203,6 +203,36 @@ func (db *DB) ListStorageObjectsByOwner(ctx context.Context, ownerID string) ([]
 	return objects, nil
 }
 
+// ListObjectsByOwnerBucket returns a user's objects within one bucket,
+// optionally filtered by name prefix. Used to scope the public list API
+// to the authenticated owner.
+func (db *DB) ListStorageObjectsByOwnerBucket(ctx context.Context, ownerID, bucketID, prefix string, limit int) ([]StorageObject, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 1000
+	}
+	rows, err := db.Pool.Query(ctx, `
+		SELECT id, bucket_id, name, owner, size, mime_type, etag, metadata, created_at, updated_at
+		FROM storage_objects
+		WHERE bucket_id = $1 AND owner = $2 AND name LIKE $3
+		ORDER BY name
+		LIMIT $4
+	`, bucketID, ownerID, prefix+"%", limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var objects []StorageObject
+	for rows.Next() {
+		var o StorageObject
+		if err := rows.Scan(&o.ID, &o.BucketID, &o.Name, &o.Owner, &o.Size, &o.MimeType, &o.ETag, &o.Metadata, &o.CreatedAt, &o.UpdatedAt); err != nil {
+			return nil, err
+		}
+		objects = append(objects, o)
+	}
+	return objects, nil
+}
+
 // SearchObjectsByMetadata searches objects by metadata key-value
 func (db *DB) SearchStorageObjectsByMetadata(ctx context.Context, bucketID, key, value string) ([]StorageObject, error) {
 	rows, err := db.Pool.Query(ctx, `
