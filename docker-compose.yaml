@@ -8,8 +8,13 @@
 services:
   rapibase:
     build: .
+    # Ports are bound to 127.0.0.1 so ONLY a reverse proxy on the host
+    # (Caddy/nginx) can reach them — never the public internet directly.
+    # Exposing 8080 to 0.0.0.0 is how an attacker can bypass Caddy and
+    # hit the API with no TLS/WAF. If your Caddy runs inside Docker,
+    # remove this published port and reach rapibase by its service name.
     ports:
-      - "${PORT:-8080}:8080"
+      - "127.0.0.1:${PORT:-8080}:8080"
     environment:
       # Database (uses 'db' service by default, override with DATABASE_URL env var)
       - DATABASE_URL=${DATABASE_URL:-postgres://rapibase:rapibase@db:5432/rapibase?sslmode=disable}
@@ -20,12 +25,15 @@ services:
       - APP_URL=${APP_URL:-http://localhost:8080}
       - CORS_ORIGINS=${CORS_ORIGINS:-*}
       
-      # Auth
-      - JWT_SECRET=${JWT_SECRET:-change-this-secret-in-production}
+      # Auth — leave JWT_SECRET / ADMIN_PASSWORD blank to have rapibase
+      # generate strong values on first boot and persist them (stable
+      # across restarts). Setting them to the old example values makes
+      # rapibase refuse to start.
+      - JWT_SECRET=${JWT_SECRET:-}
       - JWT_EXPIRY=${JWT_EXPIRY:-1h}
       - REFRESH_EXPIRY=${REFRESH_EXPIRY:-7d}
       - ADMIN_EMAIL=${ADMIN_EMAIL:-admin@rapibase.local}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
       
       # API Keys
       - ANON_KEY=${ANON_KEY:-}
@@ -86,9 +94,14 @@ services:
   minio:
     image: minio/minio:latest
     command: server /data --console-address ":9001"
+    # Bound to 127.0.0.1: the MinIO console (9001) is an admin UI that
+    # must NEVER be public, and the S3 API (9000) should be served to
+    # browsers through rapibase/Caddy (authenticated), not exposed raw.
+    # With default minioadmin credentials this binding is what stops the
+    # repo-public credentials from being usable from the internet.
     ports:
-      - "${MINIO_API_PORT:-9000}:9000"
-      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+      - "127.0.0.1:${MINIO_API_PORT:-9000}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"
     environment:
       - MINIO_ROOT_USER=${STORAGE_ACCESS_KEY:-minioadmin}
       - MINIO_ROOT_PASSWORD=${STORAGE_SECRET_KEY:-minioadmin}
