@@ -134,12 +134,30 @@ func main() {
 	}
 
 	log.Printf("🚀 RapiBase running on http://localhost:%s", port)
+	// ANON_KEY is public by design (it ships in client apps and the docs
+	// snippets), so logging it in full is harmless and saves a dashboard
+	// trip. SERVICE_KEY grants full, JWT-bypassing access — it must NEVER
+	// be written to logs, which end up in `docker logs`, journald and log
+	// aggregators (a far wider audience than the admin-only dashboard).
+	// Operators read/copy it from the dashboard → Auth → API keys
+	// (protected by RequireAdmin). We print only the last few characters so
+	// the active key can be identified when debugging, without exposing it.
 	log.Printf("📋 API Keys:")
 	log.Printf("   ANON_KEY:    %s", cfg.AnonKey)
-	log.Printf("   SERVICE_KEY: %s", cfg.ServiceKey)
+	log.Printf("   SERVICE_KEY: configured (ends …%s) — not logged in full; copy it from the dashboard → Auth → API keys", keyTail(cfg.ServiceKey))
 	if err := app.Listen(":" + port); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}
+}
+
+// keyTail returns the last few characters of a secret so logs can point at
+// which key is active without ever exposing the secret itself.
+func keyTail(s string) string {
+	const n = 4
+	if len(s) <= n {
+		return "****"
+	}
+	return s[len(s)-n:]
 }
 
 // startRealtime builds the realtime.Service, runs Bootstrap against
