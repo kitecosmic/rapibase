@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/gofiber/fiber/v2"
@@ -72,7 +73,11 @@ func main() {
 
 	// Middleware
 	app.Use(recover.New())
-	app.Use(logger.New())
+	// Skip the Docker HEALTHCHECK's /api/v1/health probe (every 30s) in the
+	// request log — it buries real traffic under thousands of no-op lines.
+	app.Use(logger.New(logger.Config{
+		Next: func(c *fiber.Ctx) bool { return c.Path() == "/api/v1/health" },
+	}))
 	app.Use(cors.New(cors.Config{
 		AllowOrigins:     cfg.CORSOrigins,
 		AllowHeaders:     "Origin, Content-Type, Accept, Authorization, apikey",
@@ -110,11 +115,29 @@ func main() {
 		log.Println("Realtime: disabled by REALTIME_ENABLED=false")
 	}
 
-	// Serve static files (React SPA)
-	app.Static("/", "./web/dist")
-	app.Get("/*", func(c *fiber.Ctx) error {
+	// Admin dashboard (React SPA): always under the reserved /_/ path — the
+	// SPA is built with base=/_/ so its assets resolve there too. This frees
+	// the root for the user's own frontend.
+	app.Static("/_", "./web/dist")
+	app.Get("/_/*", func(c *fiber.Ctx) error {
 		return c.SendFile("./web/dist/index.html")
 	})
+
+	if st, err := os.Stat(cfg.PublicDir); err == nil && st.IsDir() {
+		// Public site: PUBLIC_DIR exists → serve it at / with SPA fallback.
+		// Same-origin as /api/v1/*: fetch('/api/...') needs no CORS setup.
+		log.Printf("🌐 Public site: serving %s at / (admin dashboard at /_/)", cfg.PublicDir)
+		app.Static("/", cfg.PublicDir)
+		app.Get("/*", func(c *fiber.Ctx) error {
+			return c.SendFile(filepath.Join(cfg.PublicDir, "index.html"))
+		})
+	} else {
+		// No public site: send everything to the dashboard, preserving old
+		// deep links (/tables → /_/tables) and email links with query strings.
+		app.Get("/*", func(c *fiber.Ctx) error {
+			return c.Redirect("/_"+c.OriginalURL(), fiber.StatusFound)
+		})
+	}
 
 	// Graceful shutdown
 	shutdown := make(chan os.Signal, 1)
@@ -134,6 +157,7 @@ func main() {
 	}
 
 	log.Printf("🚀 RapiBase running on http://localhost:%s", port)
+	log.Printf("🖥️  Admin dashboard: http://localhost:%s/_/", port)
 	// ANON_KEY is public by design (it ships in client apps and the docs
 	// snippets), so logging it in full is harmless and saves a dashboard
 	// trip. SERVICE_KEY grants full, JWT-bypassing access — it must NEVER

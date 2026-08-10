@@ -63,8 +63,8 @@ export async function authedFetch(
 
   const newToken = await refreshAccessToken()
   if (!newToken) {
-    if (window.location.pathname !== '/login') {
-      window.location.href = '/login'
+    if (window.location.pathname !== `${import.meta.env.BASE_URL}login`) {
+      window.location.href = `${import.meta.env.BASE_URL}login`
     }
     return response
   }

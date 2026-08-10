@@ -21,6 +21,11 @@ type Config struct {
 	AppURL      string
 	CORSOrigins string
 
+	// PublicDir: if this directory exists, rapibase serves it at / with an
+	// SPA fallback (same-origin frontend hosting, PocketBase-style). The
+	// admin dashboard always lives under the reserved /_/ path.
+	PublicDir string
+
 	// Auth
 	JWTSecret     string
 	AdminEmail    string
@@ -82,6 +87,7 @@ func Load() *Config {
 		Port:        getEnv("PORT", "8080"),
 		AppURL:      getEnv("APP_URL", "http://localhost:8080"),
 		CORSOrigins: getEnv("CORS_ORIGINS", "*"),
+		PublicDir:   getEnv("PUBLIC_DIR", "./rb_public"),
 
 		// Auth — secrets are finalized by ResolveSecrets() after the DB
 		// is up: blank values are generated + persisted, weak known

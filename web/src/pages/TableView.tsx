@@ -1180,7 +1180,7 @@ GET /api/v1/rest/${name}?is_active.eq=true&order_by=price&order=asc&page=1&page_
               <div>
                 <h2 className="text-lg font-semibold text-gray-900">Use from an AI agent (MCP)</h2>
                 <p className="text-sm text-gray-600 mt-1">
-                  The built-in MCP server lets Claude, ChatGPT or any MCP-compatible agent query this table. See the full reference in <a href="/docs" className="text-blue-600 hover:underline">Docs → MCP for AI Agents</a>.
+                  The built-in MCP server lets Claude, ChatGPT or any MCP-compatible agent query this table. See the full reference in <a href={`${import.meta.env.BASE_URL}docs`} className="text-blue-600 hover:underline">Docs → MCP for AI Agents</a>.
                 </p>
               </div>
               <span className="inline-flex items-center px-2.5 py-1 rounded text-xs font-medium bg-orange-100 text-orange-700 whitespace-nowrap">/mcp</span>

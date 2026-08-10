@@ -23,7 +23,9 @@ func (s *SMTPClient) SendPasswordResetEmail(to, token string) error {
 		return fmt.Errorf("SMTP not configured")
 	}
 
-	resetURL := fmt.Sprintf("%s/reset-password?token=%s", s.config.AppURL, token)
+	// The admin dashboard lives under /_/ — link straight there so the reset
+	// flow works even when a public site (PUBLIC_DIR) is mounted at /.
+	resetURL := fmt.Sprintf("%s/_/reset-password?token=%s", s.config.AppURL, token)
 
 	subject := "Reset your RapiBase password"
 	body := fmt.Sprintf(`

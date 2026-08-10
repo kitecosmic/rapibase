@@ -15,6 +15,7 @@
 - ✅ **RPC Endpoint** - Call any Postgres function by name for complex queries, aggregations and reports
 - ✅ **File Storage** - S3-compatible storage with MinIO (buckets, upload, download, image preview)
 - ✅ **MCP for AI Agents** - Built-in [Model Context Protocol](https://modelcontextprotocol.io) endpoint at `/mcp` so Claude (and other agents) can discover tables, run CRUD, raw SQL, DDL and storage ops with one URL + one API key
+- ✅ **Static Hosting for Your Frontend** - Drop your build into `rb_public/` and rapibase serves it at `/` (SPA fallback included). Same origin as the API: `fetch('/api/v1/...')` with zero CORS config. The admin dashboard lives at `/_/`
 - ✅ **Docker Ready** - Single command deployment with docker-compose
 
 ### Authentication
@@ -61,9 +62,29 @@ nano .env
 # Start with docker compose
 docker compose up -d
 
-# Access at http://localhost:8080 (or http://YOUR_SERVER_IP:8080)
+# Access the admin dashboard at http://localhost:8080/_/ (or http://YOUR_SERVER_IP:8080/_/)
+# Opening the root URL redirects there automatically unless you serve your own site (see PUBLIC_DIR below).
 # Default credentials: admin@rapibase.local / admin123
 ```
+
+> **Where is the dashboard?** Always at **`/_/`** (e.g. `http://localhost:8080/_/`).
+> The root path `/` redirects to the dashboard — unless a `rb_public/` directory exists,
+> in which case `/` serves YOUR app and the dashboard stays at `/_/`. Old links like
+> `/tables` keep working: they redirect to `/_/tables`.
+
+### Host your frontend on the same server (PUBLIC_DIR)
+
+Drop your compiled frontend (the `dist/` output of Vite, CRA, etc.) into a folder named
+`rb_public/` next to the binary (or point `PUBLIC_DIR` elsewhere in `.env`):
+
+```bash
+npm run build && cp -r dist rb_public
+```
+
+- `/` now serves your app, with SPA fallback (React Router and friends just work).
+- Your frontend calls the API with relative URLs — `fetch('/api/v1/rest/...')` — **zero CORS setup**.
+- The admin dashboard keeps living at `/_/`, so nothing collides.
+- Works the same behind a domain: `APP_URL=https://yourdomain.com` needs no extra config.
 
 ### Enable HTTPS (Recommended)
 

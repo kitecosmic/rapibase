@@ -39,6 +39,12 @@ func (l *AccessLogger) Middleware() fiber.Handler {
 		if !strings.HasPrefix(path, "/api") && !strings.HasPrefix(path, "/mcp") {
 			return c.Next()
 		}
+		// The Docker HEALTHCHECK hits /api/v1/health every 30s: recording it
+		// would drown the log in noise (2,880 identical lines/day) without
+		// adding any security signal — the endpoint is public and dataless.
+		if path == "/api/v1/health" {
+			return c.Next()
+		}
 
 		start := time.Now()
 		err := c.Next()
