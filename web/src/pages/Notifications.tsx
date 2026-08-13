@@ -544,6 +544,12 @@ function IOSConfigForm({ configured }: { configured: boolean }) {
 
   return (
     <form onSubmit={handleSubmit} className="space-y-3">
+      <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800 mb-3">
+        <strong>Not available yet:</strong> native APNs delivery is not implemented — saving these
+        credentials will not send anything. Today, deliver to iOS via Firebase Cloud Messaging from a
+        server-side <strong>function</strong> (fetch to the FCM API with an FN_ secret). Web Push works
+        natively end-to-end.
+      </div>
       <p className="text-sm text-gray-600 mb-3">
         Configure iOS push notifications with your Apple Developer credentials.
       </p>
@@ -661,6 +667,11 @@ function AndroidConfigForm({ configured }: { configured: boolean }) {
 
   return (
     <form onSubmit={handleSubmit} className="space-y-3">
+      <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800 mb-3">
+        <strong>Not available yet:</strong> native FCM delivery is not implemented — saving these
+        credentials will not send anything. Today, call the FCM REST API from a server-side{' '}
+        <strong>function</strong> (fetch with an FN_ secret). Web Push works natively end-to-end.
+      </div>
       <p className="text-sm text-gray-600 mb-3">
         Configure Android push notifications with your Firebase service account.
       </p>

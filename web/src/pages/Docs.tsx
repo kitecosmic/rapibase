@@ -1641,7 +1641,7 @@ curl -s -X POST https://yourdomain.com/mcp \\
             </div>
 
             <div className="bg-gray-900 rounded-xl p-6 overflow-auto max-h-[600px]">
-              <pre className="text-gray-100 text-sm whitespace-pre-wrap">{fullDocumentation}</pre>
+              <pre className="text-gray-100 text-sm whitespace-pre-wrap break-words">{fullDocumentation}</pre>
             </div>
           </div>
         )
@@ -1690,8 +1690,9 @@ curl -s -X POST https://yourdomain.com/mcp \\
             </nav>
           </div>
 
-          {/* Content */}
-          <div className="flex-1 bg-white rounded-xl border border-gray-200 p-8">
+          {/* Content — min-w-0 evita que un <pre> ancho estire la página
+              entera: el scroll horizontal queda dentro del bloque. */}
+          <div className="flex-1 min-w-0 bg-white rounded-xl border border-gray-200 p-8 overflow-hidden">
             {renderContent()}
           </div>
         </div>

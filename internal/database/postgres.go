@@ -225,6 +225,9 @@ func (db *DB) Migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_webhook_logs_created ON _rapibase_webhook_logs(created_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_webhooks_enabled ON _rapibase_webhooks(enabled)`,
 
+		// Condiciones por webhook: solo se entrega si el row las cumple.
+		`ALTER TABLE _rapibase_webhooks ADD COLUMN IF NOT EXISTS filter JSONB NOT NULL DEFAULT '[]'`,
+
 		// ============================================
 		// PUSH NOTIFICATIONS
 		// ============================================

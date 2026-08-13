@@ -40,12 +40,13 @@ func (h *WebhooksHandler) ListWebhooks(c *fiber.Ctx) error {
 // CreateWebhook creates a new webhook
 func (h *WebhooksHandler) CreateWebhook(c *fiber.Ctx) error {
 	var req struct {
-		Name    string            `json:"name"`
-		URL     string            `json:"url"`
-		Secret  string            `json:"secret"`
-		Events  []string          `json:"events"`
-		Headers map[string]string `json:"headers"`
-		Enabled bool              `json:"enabled"`
+		Name    string                `json:"name"`
+		URL     string                `json:"url"`
+		Secret  string                `json:"secret"`
+		Events  []string              `json:"events"`
+		Headers map[string]string     `json:"headers"`
+		Filter  []webhooks.FilterCond `json:"filter"`
+		Enabled bool                  `json:"enabled"`
 	}
 
 	if err := c.BodyParser(&req); err != nil {
@@ -78,6 +79,7 @@ func (h *WebhooksHandler) CreateWebhook(c *fiber.Ctx) error {
 		Secret:  req.Secret,
 		Events:  req.Events,
 		Headers: req.Headers,
+		Filter:  req.Filter,
 		Enabled: req.Enabled,
 	}
 
@@ -129,12 +131,13 @@ func (h *WebhooksHandler) UpdateWebhook(c *fiber.Ctx) error {
 	}
 
 	var req struct {
-		Name    string            `json:"name"`
-		URL     string            `json:"url"`
-		Secret  *string           `json:"secret"`
-		Events  []string          `json:"events"`
-		Headers map[string]string `json:"headers"`
-		Enabled bool              `json:"enabled"`
+		Name    string                `json:"name"`
+		URL     string                `json:"url"`
+		Secret  *string               `json:"secret"`
+		Events  []string              `json:"events"`
+		Headers map[string]string     `json:"headers"`
+		Filter  []webhooks.FilterCond `json:"filter"`
+		Enabled bool                  `json:"enabled"`
 	}
 
 	if err := c.BodyParser(&req); err != nil {
@@ -166,6 +169,9 @@ func (h *WebhooksHandler) UpdateWebhook(c *fiber.Ctx) error {
 	}
 	if req.Headers != nil {
 		existing.Headers = req.Headers
+	}
+	if req.Filter != nil {
+		existing.Filter = req.Filter
 	}
 	existing.Enabled = req.Enabled
 

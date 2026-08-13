@@ -15,6 +15,14 @@ function formatBytes(b: number): string {
 
 // Mirrors isValidIdentifier in internal/database/schema.go so we never let the
 // user start a multi-MB upload only to have the server reject the name.
+// normalizeTableName: en vez de rechazar guiones y espacios (fricción
+// inútil), se convierten a guión bajo mientras escribes — "tabla-1" pasa a
+// "tabla_1" solo. Postgres exige comillas para identificadores con guión y
+// toda la plataforma (REST, MCP, RLS) asume identificadores simples.
+export function normalizeTableName(name: string): string {
+  return name.toLowerCase().replace(/[-\s]+/g, '_')
+}
+
 function validateTableName(name: string): string | null {
   if (!name) return null
   if (name.length > 63) return 'Maximum 63 characters'
@@ -303,7 +311,7 @@ export default function Import() {
               <input
                 type="text"
                 value={jsonNewTableName}
-                onChange={(e) => setJsonNewTableName(e.target.value)}
+                onChange={(e) => setJsonNewTableName(normalizeTableName(e.target.value))}
                 disabled={!jsonCreateNewTable}
                 placeholder="Enter table name..."
                 className={`w-full px-3 py-2 border rounded-lg focus:ring-2 outline-none disabled:bg-gray-100 disabled:cursor-not-allowed text-sm ${
@@ -410,7 +418,7 @@ export default function Import() {
               <input
                 type="text"
                 value={csvNewTableName}
-                onChange={(e) => setCsvNewTableName(e.target.value)}
+                onChange={(e) => setCsvNewTableName(normalizeTableName(e.target.value))}
                 disabled={!csvCreateNewTable}
                 placeholder="Enter table name..."
                 className={`w-full px-3 py-2 border rounded-lg focus:ring-2 outline-none disabled:bg-gray-100 disabled:cursor-not-allowed ${

@@ -9,6 +9,18 @@ import (
 	"github.com/rapibase/rapibase/internal/webhooks"
 )
 
+// marshalFilter serializa las condiciones (nil → lista vacía, nunca null).
+func marshalFilter(f []webhooks.FilterCond) ([]byte, error) {
+	if f == nil {
+		f = []webhooks.FilterCond{}
+	}
+	b, err := json.Marshal(f)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal filter: %w", err)
+	}
+	return b, nil
+}
+
 // CreateWebhook creates a new webhook
 func (db *DB) CreateWebhook(ctx context.Context, webhook *webhooks.Webhook) error {
 	eventsJSON, err := json.Marshal(webhook.Events)
@@ -21,11 +33,16 @@ func (db *DB) CreateWebhook(ctx context.Context, webhook *webhooks.Webhook) erro
 		return fmt.Errorf("failed to marshal headers: %w", err)
 	}
 
+	filterJSON, err := marshalFilter(webhook.Filter)
+	if err != nil {
+		return err
+	}
+
 	err = db.Pool.QueryRow(ctx, `
-		INSERT INTO _rapibase_webhooks (name, url, secret, events, headers, enabled)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO _rapibase_webhooks (name, url, secret, events, headers, filter, enabled)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING id, created_at, updated_at
-	`, webhook.Name, webhook.URL, webhook.Secret, eventsJSON, headersJSON, webhook.Enabled).
+	`, webhook.Name, webhook.URL, webhook.Secret, eventsJSON, headersJSON, filterJSON, webhook.Enabled).
 		Scan(&webhook.ID, &webhook.CreatedAt, &webhook.UpdatedAt)
 
 	return err
@@ -34,15 +51,15 @@ func (db *DB) CreateWebhook(ctx context.Context, webhook *webhooks.Webhook) erro
 // GetWebhook retrieves a webhook by ID
 func (db *DB) GetWebhook(ctx context.Context, id int64) (*webhooks.Webhook, error) {
 	var webhook webhooks.Webhook
-	var eventsJSON, headersJSON []byte
+	var eventsJSON, headersJSON, filterJSON []byte
 
 	err := db.Pool.QueryRow(ctx, `
-		SELECT id, name, url, secret, events, headers, enabled, created_at, updated_at
+		SELECT id, name, url, secret, events, headers, filter, enabled, created_at, updated_at
 		FROM _rapibase_webhooks
 		WHERE id = $1
 	`, id).Scan(
 		&webhook.ID, &webhook.Name, &webhook.URL, &webhook.Secret,
-		&eventsJSON, &headersJSON, &webhook.Enabled,
+		&eventsJSON, &headersJSON, &filterJSON, &webhook.Enabled,
 		&webhook.CreatedAt, &webhook.UpdatedAt,
 	)
 	if err != nil {
@@ -51,6 +68,7 @@ func (db *DB) GetWebhook(ctx context.Context, id int64) (*webhooks.Webhook, erro
 
 	json.Unmarshal(eventsJSON, &webhook.Events)
 	json.Unmarshal(headersJSON, &webhook.Headers)
+	json.Unmarshal(filterJSON, &webhook.Filter)
 
 	return &webhook, nil
 }
@@ -58,7 +76,7 @@ func (db *DB) GetWebhook(ctx context.Context, id int64) (*webhooks.Webhook, erro
 // ListWebhooks returns all webhooks
 func (db *DB) ListWebhooks(ctx context.Context) ([]webhooks.Webhook, error) {
 	rows, err := db.Pool.Query(ctx, `
-		SELECT id, name, url, secret, events, headers, enabled, created_at, updated_at
+		SELECT id, name, url, secret, events, headers, filter, enabled, created_at, updated_at
 		FROM _rapibase_webhooks
 		ORDER BY created_at DESC
 	`)
@@ -70,11 +88,11 @@ func (db *DB) ListWebhooks(ctx context.Context) ([]webhooks.Webhook, error) {
 	var result []webhooks.Webhook
 	for rows.Next() {
 		var webhook webhooks.Webhook
-		var eventsJSON, headersJSON []byte
+		var eventsJSON, headersJSON, filterJSON []byte
 
 		err := rows.Scan(
 			&webhook.ID, &webhook.Name, &webhook.URL, &webhook.Secret,
-			&eventsJSON, &headersJSON, &webhook.Enabled,
+			&eventsJSON, &headersJSON, &filterJSON, &webhook.Enabled,
 			&webhook.CreatedAt, &webhook.UpdatedAt,
 		)
 		if err != nil {
@@ -83,6 +101,7 @@ func (db *DB) ListWebhooks(ctx context.Context) ([]webhooks.Webhook, error) {
 
 		json.Unmarshal(eventsJSON, &webhook.Events)
 		json.Unmarshal(headersJSON, &webhook.Headers)
+		json.Unmarshal(filterJSON, &webhook.Filter)
 		result = append(result, webhook)
 	}
 
@@ -101,11 +120,16 @@ func (db *DB) UpdateWebhook(ctx context.Context, webhook *webhooks.Webhook) erro
 		return fmt.Errorf("failed to marshal headers: %w", err)
 	}
 
+	filterJSON, err := marshalFilter(webhook.Filter)
+	if err != nil {
+		return err
+	}
+
 	result, err := db.Pool.Exec(ctx, `
 		UPDATE _rapibase_webhooks
-		SET name = $1, url = $2, secret = $3, events = $4, headers = $5, enabled = $6, updated_at = NOW()
-		WHERE id = $7
-	`, webhook.Name, webhook.URL, webhook.Secret, eventsJSON, headersJSON, webhook.Enabled, webhook.ID)
+		SET name = $1, url = $2, secret = $3, events = $4, headers = $5, filter = $6, enabled = $7, updated_at = NOW()
+		WHERE id = $8
+	`, webhook.Name, webhook.URL, webhook.Secret, eventsJSON, headersJSON, filterJSON, webhook.Enabled, webhook.ID)
 	if err != nil {
 		return err
 	}
@@ -150,7 +174,7 @@ func (db *DB) ToggleWebhook(ctx context.Context, id int64, enabled bool) error {
 // GetEnabledWebhooksByEvent returns all enabled webhooks subscribed to an event
 func (db *DB) GetEnabledWebhooksByEvent(ctx context.Context, event string) ([]webhooks.Webhook, error) {
 	rows, err := db.Pool.Query(ctx, `
-		SELECT id, name, url, secret, events, headers, enabled, created_at, updated_at
+		SELECT id, name, url, secret, events, headers, filter, enabled, created_at, updated_at
 		FROM _rapibase_webhooks
 		WHERE enabled = true AND events @> $1::jsonb
 	`, fmt.Sprintf(`["%s"]`, event))
@@ -162,11 +186,11 @@ func (db *DB) GetEnabledWebhooksByEvent(ctx context.Context, event string) ([]we
 	var result []webhooks.Webhook
 	for rows.Next() {
 		var webhook webhooks.Webhook
-		var eventsJSON, headersJSON []byte
+		var eventsJSON, headersJSON, filterJSON []byte
 
 		err := rows.Scan(
 			&webhook.ID, &webhook.Name, &webhook.URL, &webhook.Secret,
-			&eventsJSON, &headersJSON, &webhook.Enabled,
+			&eventsJSON, &headersJSON, &filterJSON, &webhook.Enabled,
 			&webhook.CreatedAt, &webhook.UpdatedAt,
 		)
 		if err != nil {
@@ -175,6 +199,7 @@ func (db *DB) GetEnabledWebhooksByEvent(ctx context.Context, event string) ([]we
 
 		json.Unmarshal(eventsJSON, &webhook.Events)
 		json.Unmarshal(headersJSON, &webhook.Headers)
+		json.Unmarshal(filterJSON, &webhook.Filter)
 		result = append(result, webhook)
 	}
 
@@ -199,9 +224,12 @@ func (db *DB) ListWebhookLogs(ctx context.Context, webhookID *int64, success *bo
 		limit = 50
 	}
 
+	// COALESCE: al borrar un webhook sus logs quedan con webhook_id NULL
+	// (ON DELETE SET NULL) y sin él, el Scan a string rompía el listado.
 	query := `
-		SELECT l.id, l.webhook_id, w.name, l.event, l.payload, l.response_status, 
-		       l.response_body, l.attempts, l.success, l.error, l.created_at
+		SELECT l.id, COALESCE(l.webhook_id, 0), COALESCE(w.name, '(borrado)'), l.event, l.payload,
+		       COALESCE(l.response_status, 0), COALESCE(l.response_body, ''), l.attempts, l.success,
+		       COALESCE(l.error, ''), l.created_at
 		FROM _rapibase_webhook_logs l
 		LEFT JOIN _rapibase_webhooks w ON w.id = l.webhook_id
 		WHERE 1=1

@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -440,18 +441,56 @@ func callFunction(ctx context.Context, q Querier, name string, args map[string]i
 	return pgxRowsToMaps(rows)
 }
 
+// stripLeadingSQLComments quita comentarios de línea (--) y de bloque
+// (/* */) del comienzo, para que una consulta que empieza comentada se
+// clasifique por su primera sentencia real.
+func stripLeadingSQLComments(s string) string {
+	for {
+		s = strings.TrimSpace(s)
+		if strings.HasPrefix(s, "--") {
+			if i := strings.IndexByte(s, '\n'); i >= 0 {
+				s = s[i+1:]
+				continue
+			}
+			return ""
+		}
+		if strings.HasPrefix(s, "/*") {
+			if i := strings.Index(s, "*/"); i >= 0 {
+				s = s[i+2:]
+				continue
+			}
+			return ""
+		}
+		return s
+	}
+}
+
+var returningRe = regexp.MustCompile(`(?i)\bRETURNING\b`)
+
 // ExecuteQuery executes a raw SQL query. This powers the admin-only
 // dashboard SQL console and always runs with full privileges — it is
 // never exposed on the public API surface.
 func (db *DB) ExecuteQuery(ctx context.Context, sql string, params []interface{}) (*models.QueryResult, error) {
 	start := time.Now()
 
-	// Determine if it's a SELECT query
-	trimmedSQL := strings.TrimSpace(strings.ToUpper(sql))
+	// ¿Devuelve filas? SELECT y compañía, más VALUES/TABLE, más cualquier
+	// sentencia ÚNICA con RETURNING (INSERT ... RETURNING id, etc.) — antes
+	// esas devolvían solo "ok" y el resultado se perdía. Los scripts
+	// multi-sentencia siguen yendo por Exec (protocolo simple), que es el
+	// único que los acepta.
+	trimmedSQL := strings.TrimSpace(strings.ToUpper(stripLeadingSQLComments(sql)))
 	isSelect := strings.HasPrefix(trimmedSQL, "SELECT") ||
 		strings.HasPrefix(trimmedSQL, "WITH") ||
 		strings.HasPrefix(trimmedSQL, "SHOW") ||
-		strings.HasPrefix(trimmedSQL, "EXPLAIN")
+		strings.HasPrefix(trimmedSQL, "EXPLAIN") ||
+		strings.HasPrefix(trimmedSQL, "VALUES") ||
+		strings.HasPrefix(trimmedSQL, "TABLE ")
+	if !isSelect && returningRe.MatchString(sql) {
+		// una sola sentencia (a lo sumo un ';' final)
+		if !strings.Contains(strings.TrimRight(strings.TrimSpace(sql), ";"), ";") {
+			isSelect = true
+		}
+	}
 
 	if isSelect {
 		rows, err := db.Pool.Query(ctx, sql, params...)

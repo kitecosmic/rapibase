@@ -80,6 +80,10 @@ func (d *Dispatcher) Dispatch(ctx context.Context, eventType, tableName string, 
 		}
 
 		for _, webhook := range unique {
+			// condiciones del webhook: si el row no las cumple, no se envía
+			if !webhook.MatchesData(payload.Data) {
+				continue
+			}
 			d.wg.Add(1)
 			go d.deliver(ctx, webhook, payload)
 		}

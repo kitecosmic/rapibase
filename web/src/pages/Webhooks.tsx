@@ -17,6 +17,12 @@ import {
 } from 'lucide-react'
 import { webhooks } from '../lib/api'
 
+interface FilterCond {
+  column: string
+  op: string
+  value?: string
+}
+
 interface WebhookData {
   id: number
   name: string
@@ -24,6 +30,7 @@ interface WebhookData {
   secret: string
   events: string[]
   headers: Record<string, string>
+  filter?: FilterCond[]
   enabled: boolean
   created_at: string
   updated_at: string
@@ -332,12 +339,36 @@ interface WebhookModalProps {
   isLoading: boolean
 }
 
+const FILTER_OPS: [string, string][] = [
+  ['eq', '='],
+  ['neq', '≠'],
+  ['gt', '>'],
+  ['gte', '≥'],
+  ['lt', '<'],
+  ['lte', '≤'],
+  ['contains', 'contains'],
+  ['is_null', 'is null'],
+  ['not_null', 'is not null'],
+]
+
 function WebhookModal({ webhook, events, onClose, onSave, isLoading }: WebhookModalProps) {
   const [name, setName] = useState(webhook?.name || '')
   const [url, setUrl] = useState(webhook?.url || '')
   const [secret, setSecret] = useState('')
   const [selectedEvents, setSelectedEvents] = useState<string[]>(webhook?.events || [])
   const [enabled, setEnabled] = useState(webhook?.enabled ?? true)
+  const [filter, setFilter] = useState<FilterCond[]>(webhook?.filter || [])
+
+  // builder de eventos: una tabla + los tipos marcados → chips
+  const tables = [...new Set(events.map((e) => e.split(':')[1]).filter((t) => t && t !== '*'))].sort()
+  const [pickTable, setPickTable] = useState('*')
+  const [pickTypes, setPickTypes] = useState<string[]>(['INSERT', 'UPDATE', 'DELETE'])
+
+  const addEvents = () => {
+    if (pickTypes.length === 0) return
+    const added = pickTypes.map((t) => `${t}:${pickTable}`)
+    setSelectedEvents((prev) => [...new Set([...prev, ...added])])
+  }
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -346,24 +377,9 @@ function WebhookModal({ webhook, events, onClose, onSave, isLoading }: WebhookMo
       url,
       secret: secret || undefined,
       events: selectedEvents,
+      filter: filter.filter((c) => c.column && c.op),
       enabled,
     })
-  }
-
-  const toggleEvent = (event: string) => {
-    setSelectedEvents((prev) =>
-      prev.includes(event) ? prev.filter((e) => e !== event) : [...prev, event]
-    )
-  }
-
-  const selectAllOfType = (type: string) => {
-    const typeEvents = events.filter((e) => e.startsWith(type))
-    const allSelected = typeEvents.every((e) => selectedEvents.includes(e))
-    if (allSelected) {
-      setSelectedEvents((prev) => prev.filter((e) => !e.startsWith(type)))
-    } else {
-      setSelectedEvents((prev) => [...new Set([...prev, ...typeEvents])])
-    }
   }
 
   return (
@@ -419,36 +435,125 @@ function WebhookModal({ webhook, events, onClose, onSave, isLoading }: WebhookMo
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">Events</label>
-            <div className="space-y-3">
+            <div className="flex gap-2 items-center flex-wrap">
+              <select
+                value={pickTable}
+                onChange={(e) => setPickTable(e.target.value)}
+                className="px-3 py-2 border border-gray-300 rounded-lg bg-white text-sm"
+              >
+                <option value="*">All tables (*)</option>
+                {tables.map((t) => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+              </select>
               {['INSERT', 'UPDATE', 'DELETE'].map((type) => (
-                <div key={type}>
+                <label key={type} className="flex items-center gap-1.5 text-xs text-gray-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={pickTypes.includes(type)}
+                    onChange={() =>
+                      setPickTypes((prev) =>
+                        prev.includes(type) ? prev.filter((t) => t !== type) : [...prev, type]
+                      )
+                    }
+                    className="w-3.5 h-3.5"
+                  />
+                  {type}
+                </label>
+              ))}
+              <button
+                type="button"
+                onClick={addEvents}
+                disabled={pickTypes.length === 0}
+                className="px-3 py-1.5 text-xs font-medium bg-gray-100 hover:bg-gray-200 border border-gray-300 rounded-lg disabled:opacity-50 transition-colors"
+              >
+                + Add
+              </button>
+            </div>
+            {selectedEvents.length > 0 ? (
+              <div className="flex flex-wrap gap-1.5 mt-3">
+                {[...selectedEvents].sort().map((event) => (
+                  <span
+                    key={event}
+                    className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded border bg-blue-100 border-blue-300 text-blue-700"
+                  >
+                    {event}
+                    <button
+                      type="button"
+                      onClick={() => setSelectedEvents((prev) => prev.filter((e) => e !== event))}
+                      className="hover:text-blue-900"
+                      title="Remove"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-gray-500 mt-2">
+                Pick a table and the events you want, then press Add. <code>*</code> means every table.
+              </p>
+            )}
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Conditions
+              <span className="text-gray-500 font-normal ml-1">
+                - optional; deliver only when the row matches ALL of them
+              </span>
+            </label>
+            <div className="space-y-2">
+              {filter.map((cond, i) => (
+                <div key={i} className="flex gap-2 items-center">
+                  <input
+                    type="text"
+                    value={cond.column}
+                    onChange={(e) => setFilter((prev) => prev.map((c, j) => (j === i ? { ...c, column: e.target.value } : c)))}
+                    placeholder="column"
+                    className="flex-1 min-w-0 px-3 py-1.5 border border-gray-300 rounded-lg text-sm font-mono"
+                  />
+                  <select
+                    value={cond.op}
+                    onChange={(e) => setFilter((prev) => prev.map((c, j) => (j === i ? { ...c, op: e.target.value } : c)))}
+                    className="px-2 py-1.5 border border-gray-300 rounded-lg bg-white text-sm"
+                  >
+                    {FILTER_OPS.map(([op, label]) => (
+                      <option key={op} value={op}>{label}</option>
+                    ))}
+                  </select>
+                  {cond.op !== 'is_null' && cond.op !== 'not_null' && (
+                    <input
+                      type="text"
+                      value={cond.value ?? ''}
+                      onChange={(e) => setFilter((prev) => prev.map((c, j) => (j === i ? { ...c, value: e.target.value } : c)))}
+                      placeholder="value"
+                      className="flex-1 min-w-0 px-3 py-1.5 border border-gray-300 rounded-lg text-sm"
+                    />
+                  )}
                   <button
                     type="button"
-                    onClick={() => selectAllOfType(type)}
-                    className="text-sm font-medium text-blue-600 hover:text-blue-700 mb-1"
+                    onClick={() => setFilter((prev) => prev.filter((_, j) => j !== i))}
+                    className="text-gray-400 hover:text-red-600 transition-colors"
+                    title="Remove condition"
                   >
-                    {type}
+                    <X className="w-4 h-4" />
                   </button>
-                  <div className="flex flex-wrap gap-2">
-                    {events
-                      .filter((e) => e.startsWith(type))
-                      .map((event) => (
-                        <button
-                          key={event}
-                          type="button"
-                          onClick={() => toggleEvent(event)}
-                          className={`px-2 py-1 text-xs rounded border transition-colors ${
-                            selectedEvents.includes(event)
-                              ? 'bg-blue-100 border-blue-300 text-blue-700'
-                              : 'bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100'
-                          }`}
-                        >
-                          {event}
-                        </button>
-                      ))}
-                  </div>
                 </div>
               ))}
+              <button
+                type="button"
+                onClick={() => setFilter((prev) => [...prev, { column: '', op: 'eq', value: '' }])}
+                className="text-xs font-medium text-blue-600 hover:text-blue-700"
+              >
+                + Add condition
+              </button>
+              {filter.length > 0 && (
+                <p className="text-xs text-gray-500">
+                  Conditions are checked against the row data (for DELETE, the deleted row) — e.g.{' '}
+                  <code>status = paid</code> or <code>total &gt; 100</code>. Numbers compare numerically.
+                </p>
+              )}
             </div>
           </div>
 

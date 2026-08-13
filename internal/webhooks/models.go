@@ -1,8 +1,20 @@
 package webhooks
 
 import (
+	"fmt"
+	"strconv"
+	"strings"
 	"time"
 )
+
+// FilterCond is one condition a row must meet for the webhook to fire.
+// All conditions on a webhook are AND-combined and evaluated against the
+// row data of the event (for DELETE, the deleted row).
+type FilterCond struct {
+	Column string      `json:"column"`
+	Op     string      `json:"op"` // eq neq gt gte lt lte contains is_null not_null
+	Value  interface{} `json:"value,omitempty"`
+}
 
 // Webhook represents a registered webhook endpoint
 type Webhook struct {
@@ -12,9 +24,70 @@ type Webhook struct {
 	Secret    string            `json:"secret,omitempty"`
 	Events    []string          `json:"events"`
 	Headers   map[string]string `json:"headers,omitempty"`
+	Filter    []FilterCond      `json:"filter,omitempty"`
 	Enabled   bool              `json:"enabled"`
 	CreatedAt time.Time         `json:"created_at"`
 	UpdatedAt time.Time         `json:"updated_at"`
+}
+
+// MatchesData reports whether the row satisfies every filter condition.
+// Sin condiciones → siempre true. Comparación numérica cuando ambos lados
+// parsean como número; si no, comparación de strings.
+func (w Webhook) MatchesData(data map[string]interface{}) bool {
+	if len(w.Filter) == 0 {
+		return true
+	}
+	if data == nil {
+		return false
+	}
+	for _, c := range w.Filter {
+		v, exists := data[c.Column]
+		switch c.Op {
+		case "is_null":
+			if exists && v != nil {
+				return false
+			}
+			continue
+		case "not_null":
+			if !exists || v == nil {
+				return false
+			}
+			continue
+		}
+		if !exists || v == nil {
+			return false
+		}
+		got := fmt.Sprint(v)
+		want := fmt.Sprint(c.Value)
+		gn, gErr := strconv.ParseFloat(got, 64)
+		wn, wErr := strconv.ParseFloat(want, 64)
+		numeric := gErr == nil && wErr == nil
+
+		ok := false
+		switch c.Op {
+		case "eq":
+			ok = (numeric && gn == wn) || (!numeric && got == want)
+		case "neq":
+			ok = (numeric && gn != wn) || (!numeric && got != want)
+		case "gt":
+			ok = (numeric && gn > wn) || (!numeric && got > want)
+		case "gte":
+			ok = (numeric && gn >= wn) || (!numeric && got >= want)
+		case "lt":
+			ok = (numeric && gn < wn) || (!numeric && got < want)
+		case "lte":
+			ok = (numeric && gn <= wn) || (!numeric && got <= want)
+		case "contains":
+			ok = strings.Contains(strings.ToLower(got), strings.ToLower(want))
+		default:
+			// operador desconocido: mejor no filtrar de más
+			ok = true
+		}
+		if !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // WebhookLog represents a webhook delivery attempt
