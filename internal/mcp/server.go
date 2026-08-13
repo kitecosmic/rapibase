@@ -57,6 +57,10 @@ Recommended flow:
    user explicitly asks to add or remove a table.
 6. Storage tools (list_buckets, list_objects, upload_object, ...) talk to
    the bundled MinIO. Files are exchanged as base64 strings.
+7. Row-level security: list_rls shows which tables are protected;
+   set_rls(table, mode, owner_column) configures it (modes: owner /
+   authenticated / public / custom) and disable_rls removes it. Use mode
+   "owner" for per-user data — SERVICE_KEY access always bypasses RLS.
 
 Beyond MCP, the same instance serves the full HTTP API the app you are
 building will consume: auth for end users at /api/v1/auth/*, REST CRUD at
@@ -85,7 +89,10 @@ says so.
 
 If this instance is managed by Rapibase Cloud, the project's console
 (Conectar tab) serves a per-project SKILL.md with these URLs and keys
-pre-filled, plus deploy instructions for publishing the frontend.
+pre-filled, plus deploy instructions for publishing the frontend. A local
+SKILL.md can be OUTDATED: its header shows its version and the exact curl
+to re-download it — refresh it if this server mentions capabilities
+(functions, realtime, pgvector, RLS tools) that your copy does not.
 
 Authentication is handled by the API key sent with the request. The agent
 never sees credentials.`

@@ -71,6 +71,7 @@ func (h *Handler) registerTools() {
 	h.registerCRUDTools()
 	h.registerSQLTools()
 	h.registerDDLTools()
+	h.registerRLSTools()
 	if h.storage != nil {
 		h.registerStorageTools()
 	}

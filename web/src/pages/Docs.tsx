@@ -694,6 +694,7 @@ ANON_KEY + JWT is **not** accepted on \`/mcp\`. Agents get full access (SERVICE_
 | insert_row, update_row, delete_row | CRUD on any table (fires webhooks) |
 | execute_sql | Parameterised raw SQL ($1, $2, ...) |
 | create_table, drop_table | Schema changes |
+| list_rls, set_rls, disable_rls | Row-level security: inspect and configure per-table modes (owner/authenticated/public/custom) |
 | list_buckets, list_objects, download_object, upload_object, delete_object | S3-compatible storage |
 
 Resources: \`rapibase://tables\` (live list), \`rapibase://tables/{name}\` (single schema).
@@ -1525,6 +1526,7 @@ console.log('Files:', files.objects);`} />
                     <tr><td className="px-4 py-2 font-mono text-xs">insert_row · update_row · delete_row</td><td className="px-4 py-2">CRUD on any table. Fires the same webhooks as the REST API.</td></tr>
                     <tr><td className="px-4 py-2 font-mono text-xs">execute_sql</td><td className="px-4 py-2">Parameterised raw SQL. Internal <code>_rapibase_*</code> tables are blocked.</td></tr>
                     <tr><td className="px-4 py-2 font-mono text-xs">create_table · drop_table</td><td className="px-4 py-2">Schema changes when the user explicitly authorises them.</td></tr>
+                    <tr><td className="px-4 py-2 font-mono text-xs">list_rls · set_rls · disable_rls</td><td className="px-4 py-2">Row-level security: inspect and set per-table modes (owner / authenticated / public / custom).</td></tr>
                     <tr><td className="px-4 py-2 font-mono text-xs">list_buckets · list_objects · download_object · upload_object · delete_object</td><td className="px-4 py-2">S3-compatible storage. Files exchanged as base64.</td></tr>
                   </tbody>
                 </table>
@@ -1551,7 +1553,7 @@ console.log('Files:', files.objects);`} />
   }
 }`} />
               <p className="text-sm text-gray-500 mt-2">
-                Restart Claude Desktop and the <code>rapibase</code> server appears with all 14 tools and 2 resources.
+                Restart Claude Desktop and the <code>rapibase</code> server appears with all 17 tools and 2 resources.
               </p>
             </div>
 
@@ -1606,7 +1608,7 @@ curl -s -X POST https://yourdomain.com/mcp \\
   -H "apikey: $SERVICE_KEY" \\
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' \\
 | jq '.result.tools[].name'`} />
-              <p className="text-sm text-gray-500 mt-2">You should see all 14 tool names listed.</p>
+              <p className="text-sm text-gray-500 mt-2">You should see all 17 tool names listed.</p>
             </div>
 
             <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
