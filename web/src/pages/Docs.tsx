@@ -118,6 +118,24 @@ Headers: { "apikey": "ANON_KEY", "Content-Type": "application/json" }
 Body: { "refresh_token": "abc123..." }
 \`\`\`
 
+### Social Login (OAuth: Google, GitHub, Facebook)
+
+Enable a provider by setting OAUTH_{PROVIDER}_CLIENT_ID and _CLIENT_SECRET, and register
+this callback URL in the provider's console: {APP_URL}/api/v1/auth/oauth/{provider}/callback
+
+\`\`\`
+GET /api/v1/auth/oauth/providers          → {"providers":["google","github"]}
+GET /api/v1/auth/oauth/{provider}?redirect_url=https://yourapp.com/auth/callback
+   → browser navigation (a plain <a> link); redirects to the provider's consent screen
+
+After consent, the user lands on your redirect_url with the SAME fragment
+format as magic links, so one callback page handles both:
+https://yourapp.com/auth/callback#access_token=...&refresh_token=...&expires_in=3600&type=oauth&provider=google
+\`\`\`
+
+Users are found-or-created by their provider-verified email. redirect_url must belong to
+APP_URL, AUTH_REDIRECT_URL or an origin listed in CORS_ORIGINS (localhost always allowed).
+
 ## Email Flows
 
 ### Magic Link (Passwordless Sign In)
@@ -930,6 +948,29 @@ Response: {
   "refresh_token": "newtoken...",  // New token! Old one is invalidated
   "expires_in": 3600
 }`} />
+              </div>
+
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900 mb-3">Social Login (Google, GitHub, Facebook)</h3>
+                <p className="text-gray-600 mb-2">
+                  Set <code>OAUTH_&#123;PROVIDER&#125;_CLIENT_ID</code> / <code>_CLIENT_SECRET</code> and register the
+                  callback URL <code>&#123;APP_URL&#125;/api/v1/auth/oauth/&#123;provider&#125;/callback</code> in the
+                  provider's console. The login button is a plain link — no SDKs:
+                </p>
+                <CodeBlock code={`<a href="/api/v1/auth/oauth/google?redirect_url=https://yourapp.com/auth/callback">
+  Sign in with Google
+</a>
+
+// Configured providers (render only working buttons):
+GET /api/v1/auth/oauth/providers → {"providers":["google","github"]}
+
+// After consent the user lands on redirect_url with the SAME fragment
+// format as magic links — one callback page handles both:
+https://yourapp.com/auth/callback#access_token=...&refresh_token=...&type=oauth&provider=google`} />
+                <p className="text-sm text-gray-500 mt-2">
+                  Users are found-or-created by their provider-verified email. <code>redirect_url</code> must
+                  belong to APP_URL, AUTH_REDIRECT_URL or an origin in CORS_ORIGINS (localhost always allowed).
+                </p>
               </div>
             </div>
           </div>

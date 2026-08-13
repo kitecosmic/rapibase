@@ -76,11 +76,30 @@ func (h *PushHandler) GetPushConfigs(c *fiber.Ctx) error {
 func (h *PushHandler) SetupWebPush(c *fiber.Ctx) error {
 	var req struct {
 		Subject string `json:"subject"` // mailto: or https:// URL
+		Force   bool   `json:"force"`   // true = regenerar aunque existan keys
 	}
 	c.BodyParser(&req)
 
 	if req.Subject == "" {
 		req.Subject = "mailto:admin@rapibase.local"
+	}
+
+	// Idempotente: si ya hay VAPID keys, se reutilizan (regenerarlas
+	// invalidaría todas las suscripciones existentes). Con force:true se
+	// regeneran a sabiendas.
+	if !req.Force {
+		if existing, err := h.db.GetPushConfig(c.Context(), push.PlatformWeb); err == nil {
+			if pub, ok := existing.Config["vapid_public_key"].(string); ok && pub != "" {
+				if !existing.Enabled {
+					existing.Enabled = true
+					_ = h.db.UpsertPushConfig(c.Context(), existing)
+				}
+				return c.JSON(fiber.Map{
+					"message":          "Web Push already configured (pass force:true to regenerate keys)",
+					"vapid_public_key": pub,
+				})
+			}
+		}
 	}
 
 	// Generate new VAPID keys

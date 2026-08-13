@@ -81,6 +81,16 @@ type Config struct {
 	// (HTTP endpoints, cron schedules and queue workers).
 	FunctionsEnabled bool
 	FunctionsDir     string
+
+	// Social login (OAuth authorization code). A provider is enabled when
+	// both its client id and secret are set. Callback URL to register at
+	// the provider: {APP_URL}/api/v1/auth/oauth/{provider}/callback
+	OAuthGoogleClientID       string
+	OAuthGoogleClientSecret   string
+	OAuthGitHubClientID       string
+	OAuthGitHubClientSecret   string
+	OAuthFacebookClientID     string
+	OAuthFacebookClientSecret string
 }
 
 func Load() *Config {
@@ -147,6 +157,14 @@ func Load() *Config {
 		// Functions (TS/JS embebido: HTTP + cron + workers)
 		FunctionsEnabled: getEnvBool("FUNCTIONS_ENABLED", true),
 		FunctionsDir:     getEnv("FUNCTIONS_DIR", "./rb_functions"),
+
+		// Login social
+		OAuthGoogleClientID:       getEnv("OAUTH_GOOGLE_CLIENT_ID", ""),
+		OAuthGoogleClientSecret:   getEnv("OAUTH_GOOGLE_CLIENT_SECRET", ""),
+		OAuthGitHubClientID:       getEnv("OAUTH_GITHUB_CLIENT_ID", ""),
+		OAuthGitHubClientSecret:   getEnv("OAUTH_GITHUB_CLIENT_SECRET", ""),
+		OAuthFacebookClientID:     getEnv("OAUTH_FACEBOOK_CLIENT_ID", ""),
+		OAuthFacebookClientSecret: getEnv("OAUTH_FACEBOOK_CLIENT_SECRET", ""),
 	}
 }
 

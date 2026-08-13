@@ -83,6 +83,14 @@ func SetupRoutes(app *fiber.App, db *database.DB, cfg *config.Config) *WebhookDi
 	api.Get("/auth/verify", authUsersHandler.VerifyEmail)
 	api.Get("/auth/magic", authUsersHandler.VerifyMagicLink)
 
+	// Login social (OAuth): navegación de navegador, sin apikey — igual que
+	// los callbacks de email. /providers ANTES de /:provider para que la
+	// palabra "providers" no se trague como parámetro.
+	oauthHandler := handlers.NewOAuthHandler(db, jwtManager, cfg)
+	api.Get("/auth/oauth/providers", oauthHandler.Providers)
+	api.Get("/auth/oauth/:provider", oauthHandler.Start)
+	api.Get("/auth/oauth/:provider/callback", oauthHandler.Callback)
+
 	// ============================================
 	// AUTH - Public endpoints for third-party apps
 	// Requires API key (JWT optional - for signup/signin)
@@ -223,6 +231,18 @@ func SetupRoutes(app *fiber.App, db *database.DB, cfg *config.Config) *WebhookDi
 	// Use this from n8n, webhooks, or other automation tools
 	// ============================================
 	pushAPI.Post("/send", pushHandler.SendNotification)
+
+	// ============================================
+	// PUSH - Configuración por API (SERVICE_KEY): un agente deja el push
+	// funcionando sin abrir el dashboard — genera VAPID (idempotente),
+	// registra credenciales APNs/FCM y consulta el estado.
+	// ============================================
+	pushConfigAPI := api.Group("/push/config", apiKeyMiddleware.RequireServiceKey())
+	pushConfigAPI.Get("/", pushHandler.GetPushConfigs)
+	pushConfigAPI.Post("/web", pushHandler.SetupWebPush)
+	pushConfigAPI.Post("/ios", pushHandler.SetupIOSPush)
+	pushConfigAPI.Post("/android", pushHandler.SetupAndroidPush)
+	pushConfigAPI.Patch("/:platform/toggle", pushHandler.TogglePushConfig)
 
 	// ============================================
 	// STORAGE (MinIO) - Admin routes
