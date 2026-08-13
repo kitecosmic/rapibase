@@ -58,6 +58,21 @@ Recommended flow:
 6. Storage tools (list_buckets, list_objects, upload_object, ...) talk to
    the bundled MinIO. Files are exchanged as base64 strings.
 
+Beyond MCP, the same instance serves the full HTTP API the app you are
+building will consume: auth for end users at /api/v1/auth/*, REST CRUD at
+/api/v1/rest/{table} (filters as column.op=value query params), Postgres
+functions at /api/v1/rpc/{fn}, and storage at /api/v1/storage/*.
+
+Realtime: the instance also has a WebSocket for live data (postgres
+changes, broadcast, presence) at /api/realtime/v1 — auth via ?apikey=
+(+ optional user ?token=), and the subprotocol rapibase-realtime.v1+json
+is REQUIRED. Full protocol docs: GET /api/realtime/docs (markdown). Use it
+when the app needs live updates instead of polling query_rows.
+
+If this instance is managed by Rapibase Cloud, the project's console
+(Conectar tab) serves a per-project SKILL.md with these URLs and keys
+pre-filled, plus deploy instructions for publishing the frontend.
+
 Authentication is handled by the API key sent with the request. The agent
 never sees credentials.`
 )
