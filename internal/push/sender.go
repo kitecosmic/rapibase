@@ -333,29 +333,8 @@ func (s *Sender) createVAPIDJWT(endpoint string, config WebPushConfig) (string, 
 	return token.SignedString(privKey)
 }
 
-// sendAPNS sends an Apple Push Notification (placeholder)
-func (s *Sender) sendAPNS(ctx context.Context, sub PushSubscription, msg PushMessage) error {
-	config, err := s.store.GetPushConfig(ctx, PlatformIOS)
-	if err != nil || !config.Enabled {
-		return fmt.Errorf("APNS not configured")
-	}
-
-	// TODO: Implement APNS sending
-	// This requires the .p8 key and proper JWT signing
-	return fmt.Errorf("APNS not implemented yet")
-}
-
-// sendFCM sends a Firebase Cloud Messaging notification (placeholder)
-func (s *Sender) sendFCM(ctx context.Context, sub PushSubscription, msg PushMessage) error {
-	config, err := s.store.GetPushConfig(ctx, PlatformAndroid)
-	if err != nil || !config.Enabled {
-		return fmt.Errorf("FCM not configured")
-	}
-
-	// TODO: Implement FCM HTTP v1 sending
-	// This requires service account credentials
-	return fmt.Errorf("FCM not implemented yet")
-}
+// sendAPNS y sendFCM viven en native.go (envío nativo real con caché de
+// tokens de autenticación).
 
 // hmacSHA256 helper
 func hmacSHA256(key, data []byte) []byte {
