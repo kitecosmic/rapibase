@@ -45,6 +45,40 @@ func TestHTTPFunctionTS(t *testing.T) {
 	}
 }
 
+func TestEnvGetHostKeysAndSecrets(t *testing.T) {
+	dir := t.TempDir()
+	writeFn(t, dir, "vars.ts", `
+		fn.http("vars", () => ({
+			svc: env.get("SERVICE_KEY"),
+			anon: env.get("ANON_KEY"),
+			url: env.get("APP_URL"),
+			secreto: env.get("FN_TEST_SECRET"),
+			vetada: env.get("PATH"),
+		}))
+	`)
+	t.Setenv("FN_TEST_SECRET", "abc")
+	s := New(nil, dir)
+	s.SetHostEnv(map[string]string{
+		"SERVICE_KEY": "sk-123",
+		"ANON_KEY":    "ak-456",
+		"APP_URL":     "http://localhost:8080",
+	})
+	res, err := s.InvokeHTTP(context.Background(), "vars", map[string]interface{}{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := res.(map[string]interface{})
+	if m["svc"] != "sk-123" || m["anon"] != "ak-456" || m["url"] != "http://localhost:8080" {
+		t.Fatalf("claves de instancia no expuestas: %v", m)
+	}
+	if m["secreto"] != "abc" {
+		t.Fatalf("secret FN_ no legible: %v", m)
+	}
+	if m["vetada"] != "" {
+		t.Fatalf("una variable fuera de la whitelist se filtró: %v", m)
+	}
+}
+
 func TestAsyncHandlerResolves(t *testing.T) {
 	dir := t.TempDir()
 	// los LLM escriben async por instinto: await sobre valores síncronos

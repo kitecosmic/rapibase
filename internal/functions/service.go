@@ -43,6 +43,11 @@ type Service struct {
 	db  *database.DB
 	dir string
 
+	// hostEnv: claves de la propia instancia (SERVICE_KEY, ANON_KEY,
+	// APP_URL) expuestas a env.get además de los secrets FN_*. Se fija UNA
+	// vez en Setup, antes de servir tráfico — después solo hay lecturas.
+	hostEnv map[string]string
+
 	mu    sync.RWMutex
 	pool  *enginePool
 	meta  []Meta
@@ -214,6 +219,11 @@ func (s *Service) Snapshot() (meta []Meta, errs []string, files []string) {
 }
 
 func (s *Service) Dir() string { return s.dir }
+
+// SetHostEnv fija las claves de la instancia visibles vía env.get. Debe
+// llamarse antes de atender invocaciones (Setup lo hace); las functions
+// las leen para llamar a la API de su propia instancia sin hardcodear keys.
+func (s *Service) SetHostEnv(env map[string]string) { s.hostEnv = env }
 
 func (s *Service) currentPool() *enginePool {
 	s.mu.RLock()

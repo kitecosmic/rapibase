@@ -173,9 +173,14 @@ func (e *engine) installAPIs() {
 	// `const r = await fetch(...)` también funciona.
 	vm.Set("fetch", httpObj.Get("fetch"))
 
-	// --- env.get (solo FN_*) --------------------------------------------
+	// --- env.get (FN_* + claves de la instancia) ------------------------
+	// hostEnv viene del config (no de os.Getenv: el core puede haber
+	// GENERADO las keys si no llegaron por entorno).
 	envObj := vm.NewObject()
 	_ = envObj.Set("get", func(name string) string {
+		if v, ok := e.svc.hostEnv[name]; ok {
+			return v
+		}
 		if strings.HasPrefix(name, "FN_") {
 			return os.Getenv(name)
 		}

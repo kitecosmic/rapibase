@@ -78,7 +78,15 @@ declare function fetch(
 declare const http: { fetch: typeof fetch }
 
 declare const env: {
-  /** Secrets de functions: SOLO variables con prefijo FN_ (p. ej. FN_STRIPE_KEY). Devuelve "" si no existe. */
+  /**
+   * Secrets y claves de la instancia. Disponibles:
+   *  - "SERVICE_KEY", "ANON_KEY", "APP_URL" — de la PROPIA instancia, ya
+   *    integradas: úsalas para llamar a la API de la instancia con fetch
+   *    (push, storage, auth admin…). Nunca las hardcodees en el archivo.
+   *  - FN_* — secrets propios para credenciales de TERCEROS
+   *    (p. ej. FN_STRIPE_KEY), configurados fuera del código.
+   * Cualquier otra variable devuelve "".
+   */
   get(name: string): string
 }
 

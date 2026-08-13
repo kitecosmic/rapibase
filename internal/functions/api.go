@@ -34,6 +34,11 @@ const maxFunctionFileSize = 512 * 1024
 //	POST /api/v1/jobs               — encolar un job (service key)
 //	GET  /api/v1/jobs               — inspeccionar la cola (service key)
 func Setup(app *fiber.App, svc *Service, cfg *config.Config, jwtManager *auth.JWTManager, requireServiceKey fiber.Handler) {
+	svc.SetHostEnv(map[string]string{
+		"SERVICE_KEY": cfg.ServiceKey,
+		"ANON_KEY":    cfg.AnonKey,
+		"APP_URL":     cfg.AppURL,
+	})
 	h := &httpHandler{svc: svc, cfg: cfg, jwt: jwtManager}
 
 	app.All("/api/fn/:name", h.invoke)

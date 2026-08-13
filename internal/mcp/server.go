@@ -75,7 +75,9 @@ when the app needs live updates instead of polling query_rows.
 
 Functions: server-side TypeScript running inside the instance — custom
 HTTP endpoints (/api/fn/{name}), cron schedules and queue workers, with
-sync APIs (db.query, fetch, env.get("FN_*") secrets, jobs.enqueue).
+sync APIs (db.query, fetch, jobs.enqueue, env.get — FN_* secrets for
+third-party keys, plus the instance's own SERVICE_KEY / ANON_KEY / APP_URL
+built in, so a function calls this instance's API without hardcoding keys).
 Deploy a file with POST /api/v1/functions (multipart "file", service key);
 compile errors come back in the response. Full type definitions:
 GET /api/v1/functions/types. Use functions for logic that must stay
