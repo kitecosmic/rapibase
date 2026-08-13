@@ -14,10 +14,11 @@ import {
   FileText,
   ChevronRight,
   HardDrive,
-  FunctionSquare
+  FunctionSquare,
+  Radio
 } from 'lucide-react'
 
-type DocSection = 'overview' | 'quickstart' | 'auth-flow' | 'api-keys' | 'rest-api' | 'rpc' | 'storage-api' | 'email-flows' | 'mcp' | 'examples'
+type DocSection = 'overview' | 'quickstart' | 'auth-flow' | 'api-keys' | 'rest-api' | 'rpc' | 'storage-api' | 'email-flows' | 'realtime' | 'mcp' | 'examples'
 
 export default function Docs() {
   const [copiedSection, setCopiedSection] = useState<string | null>(null)
@@ -38,6 +39,7 @@ export default function Docs() {
     { id: 'rest-api', title: 'REST API', icon: <Database className="w-4 h-4" /> },
     { id: 'rpc', title: 'RPC (Functions)', icon: <FunctionSquare className="w-4 h-4" /> },
     { id: 'storage-api', title: 'Storage API', icon: <HardDrive className="w-4 h-4" /> },
+    { id: 'realtime', title: 'Realtime', icon: <Radio className="w-4 h-4" /> },
     { id: 'mcp', title: 'MCP for AI Agents', icon: <Bot className="w-4 h-4" /> },
     { id: 'examples', title: 'Full Examples', icon: <Code className="w-4 h-4" /> },
   ]
@@ -233,8 +235,12 @@ Headers: { "apikey": "SERVICE_KEY" }
 
 **SELECT (GET)**
 \`\`\`
-GET /api/v1/rest/{table}?page=1&page_size=50&order_by=created_at&order_dir=desc
-GET /api/v1/rest/{table}?filter=status:eq:active
+GET /api/v1/rest/{table}?page=1&page_size=50&order_by=created_at&order=desc
+GET /api/v1/rest/{table}?status.eq=active&price.gt=100&select=id,name,price
+
+Filters: one query param per condition, format {column}.{op}={value}.
+Operators: eq, neq, gt, gte, lt, lte, like, ilike, is (null|true|false), in (comma-separated).
+Response: { "data": [...], "page": 1, "page_size": 50, "total_rows": N, "total_pages": N }
 \`\`\`
 
 **INSERT (POST)**
@@ -482,6 +488,47 @@ async function deleteFile(bucket, key) {
 const result = await uploadFile('images', myFile, 'avatars/');
 console.log('Uploaded:', result.public_url);
 \`\`\`
+
+## Realtime — WebSocket
+
+Endpoint: \`GET /api/realtime/v1\` (WebSocket upgrade).
+
+- Auth via query string (browser WebSocket cannot set headers): \`?apikey=ANON_KEY&token=USER_JWT\` — or \`?apikey=SERVICE_KEY\` without JWT. Server-side clients may use \`Authorization: Bearer\` instead.
+- The client MUST request the subprotocol \`rapibase-realtime.v1+json\`, otherwise the server rejects the upgrade.
+
+\`\`\`javascript
+const ws = new WebSocket(
+  \`wss://your-rapibase.com/api/realtime/v1?apikey=\${ANON_KEY}&token=\${userJwt}\`,
+  ['rapibase-realtime.v1+json']
+);
+\`\`\`
+
+Subscribe to Postgres changes, broadcast and presence on a channel:
+
+\`\`\`json
+{
+  "type": "subscribe",
+  "ref": "s1",
+  "channel": "room:42",
+  "config": {
+    "postgres_changes": [{
+      "event": "INSERT",
+      "schema": "public",
+      "table": "messages",
+      "filter": { "op": "and", "conditions": [
+        { "column": "room_id", "op": "eq", "value": 42 }
+      ]}
+    }],
+    "broadcast": { "self": false },
+    "presence": { "key": "user_7" }
+  }
+}
+\`\`\`
+
+- \`event\` is INSERT | UPDATE | DELETE | "*". Incoming \`postgres_changes\` frames carry \`db_event\` (INSERT|UPDATE|DELETE), \`new\` and \`old\`.
+- Filters are structured JSON (ops: eq, neq, lt, lte, gt, gte, in, nin, is, like, ilike, contains, contained_by, match) — not a PostgREST-style string DSL.
+- Other client frames: unsubscribe, broadcast, presence_track / presence_untrack, rpc, heartbeat, set_auth.
+- Full protocol reference, SDK usage and troubleshooting: Realtime tab in the dashboard (served from \`docs/realtime/\`, also at \`GET /api/realtime/docs\`).
 
 ## Full Integration Example
 
@@ -1002,11 +1049,19 @@ Body: {
                 <h3 className="font-semibold text-gray-900 mb-2">SELECT (GET)</h3>
                 <CodeBlock code={`GET /api/v1/rest/{table}
 GET /api/v1/rest/{table}?page=1&page_size=50
-GET /api/v1/rest/{table}?order_by=created_at&order_dir=desc
-GET /api/v1/rest/{table}?filter=status:eq:active
+GET /api/v1/rest/{table}?order_by=created_at&order=desc
+GET /api/v1/rest/{table}?status.eq=active&price.gt=100
+GET /api/v1/rest/{table}?select=id,name,price
 
 Headers (Anon Key): { "apikey": "ANON_KEY", "Authorization": "Bearer TOKEN" }
-Headers (Service Key): { "apikey": "SERVICE_KEY" }`} />
+Headers (Service Key): { "apikey": "SERVICE_KEY" }
+
+Response: { "data": [...], "page": 1, "page_size": 50, "total_rows": N, "total_pages": N }`} />
+                <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 mt-3">
+                  <p className="text-sm text-gray-700">
+                    <strong>Filters:</strong> one query param per condition, format <code className="bg-gray-200 px-1 rounded">{'{column}.{op}={value}'}</code> — e.g. <code className="bg-gray-200 px-1 rounded">price.gt=100</code>. Operators: <code>eq</code>, <code>neq</code>, <code>gt</code>, <code>gte</code>, <code>lt</code>, <code>lte</code>, <code>like</code>, <code>ilike</code>, <code>is</code> (null|true|false), <code>in</code> (comma-separated). A param without operator (<code className="bg-gray-200 px-1 rounded">status=active</code>) defaults to <code>eq</code>.
+                  </p>
+                </div>
               </div>
 
               <div>
@@ -1342,6 +1397,61 @@ console.log('Files:', files.objects);`} />
               <p className="text-sm text-yellow-800">
                 <strong>💡 Public vs Private Buckets:</strong> Public buckets allow direct URL access to files. 
                 Private buckets require API key authentication. You can toggle bucket visibility in the Storage dashboard.
+              </p>
+            </div>
+          </div>
+        )
+
+      case 'realtime':
+        return (
+          <div className="space-y-6">
+            <div>
+              <h2 className="text-2xl font-bold text-gray-900 mb-2 flex items-center gap-2">
+                <Radio className="w-7 h-7 text-green-600" /> Realtime — WebSocket
+              </h2>
+              <p className="text-gray-600">
+                Subscribe to database changes (INSERT / UPDATE / DELETE), broadcast ephemeral messages and track presence over a single WebSocket at <code className="px-1.5 py-0.5 bg-gray-100 rounded text-sm">GET /api/realtime/v1</code>.
+              </p>
+            </div>
+
+            <div>
+              <h3 className="text-lg font-semibold text-gray-900 mb-3">Connect</h3>
+              <p className="text-gray-600 mb-3">
+                Auth goes in the query string (browser WebSocket clients cannot set headers): <code>apikey</code> plus an optional user <code>token</code> (JWT). The subprotocol <code className="bg-gray-100 px-1 rounded">rapibase-realtime.v1+json</code> is <strong>required</strong> — without it the server rejects the upgrade.
+              </p>
+              <CodeBlock code={`const ws = new WebSocket(
+  \`wss://your-rapibase.com/api/realtime/v1?apikey=\${ANON_KEY}&token=\${userJwt}\`,
+  ['rapibase-realtime.v1+json']
+);`} />
+            </div>
+
+            <div>
+              <h3 className="text-lg font-semibold text-gray-900 mb-3">Subscribe to a channel</h3>
+              <CodeBlock code={`{
+  "type": "subscribe",
+  "ref": "s1",
+  "channel": "room:42",
+  "config": {
+    "postgres_changes": [{
+      "event": "INSERT",
+      "schema": "public",
+      "table": "messages",
+      "filter": { "op": "and", "conditions": [
+        { "column": "room_id", "op": "eq", "value": 42 }
+      ]}
+    }],
+    "broadcast": { "self": false },
+    "presence": { "key": "user_7" }
+  }
+}`} />
+              <p className="text-sm text-gray-600 mt-2">
+                <code>event</code> is <code>INSERT</code> | <code>UPDATE</code> | <code>DELETE</code> | <code>"*"</code>. Incoming <code>postgres_changes</code> frames carry <code>db_event</code>, <code>new</code> and <code>old</code>. Filters are structured JSON — not a PostgREST-style string DSL.
+              </p>
+            </div>
+
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+              <p className="text-sm text-blue-900">
+                <strong>📚 Full reference:</strong> the <strong>Realtime</strong> tab in this dashboard has the complete protocol spec, SDK quickstart, broadcast/presence/RPC guides and troubleshooting — served from <code>docs/realtime/</code>.
               </p>
             </div>
           </div>

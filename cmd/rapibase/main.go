@@ -78,11 +78,14 @@ func main() {
 	app.Use(logger.New(logger.Config{
 		Next: func(c *fiber.Ctx) bool { return c.Path() == "/api/v1/health" },
 	}))
+	// AllowCredentials deliberately omitted: the API authenticates via the
+	// apikey/Authorization headers, never cookies, and the spec forbids
+	// credentials together with a wildcard origin (Fiber >= 2.52.1 panics
+	// on that combination at startup).
 	app.Use(cors.New(cors.Config{
-		AllowOrigins:     cfg.CORSOrigins,
-		AllowHeaders:     "Origin, Content-Type, Accept, Authorization, apikey",
-		AllowMethods:     "GET, POST, PUT, DELETE, OPTIONS",
-		AllowCredentials: true,
+		AllowOrigins: cfg.CORSOrigins,
+		AllowHeaders: "Origin, Content-Type, Accept, Authorization, apikey",
+		AllowMethods: "GET, POST, PUT, DELETE, OPTIONS",
 	}))
 
 	// Access log: records every /api and /mcp request with the real
