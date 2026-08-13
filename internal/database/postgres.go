@@ -50,6 +50,15 @@ func (db *DB) Close() {
 func (db *DB) Migrate() error {
 	ctx := context.Background()
 
+	// pgvector (embeddings + búsqueda por similitud) si el Postgres lo trae
+	// — la imagen pgvector/pgvector:pg16 lo incluye; en un Postgres sin la
+	// extensión esto solo deja un aviso y todo lo demás sigue igual.
+	if _, err := db.Pool.Exec(ctx, `CREATE EXTENSION IF NOT EXISTS vector`); err != nil {
+		log.Printf("pgvector no disponible en este Postgres (opcional): %v", err)
+	} else {
+		log.Println("pgvector habilitado (tipo `vector` disponible)")
+	}
+
 	migrations := []string{
 		// Users table
 		`CREATE TABLE IF NOT EXISTS _rapibase_users (

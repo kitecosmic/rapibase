@@ -76,6 +76,11 @@ type Config struct {
 	// rapibase instances against the same Postgres so only one node
 	// consumes the replication slot. Zero (default) means single-node.
 	RealtimeLockKey int64
+
+	// Functions: user-provided TS/JS running in an embedded interpreter
+	// (HTTP endpoints, cron schedules and queue workers).
+	FunctionsEnabled bool
+	FunctionsDir     string
 }
 
 func Load() *Config {
@@ -138,6 +143,10 @@ func Load() *Config {
 		RealtimeSlotName:        getEnv("REALTIME_SLOT_NAME", "rapibase"),
 		RealtimePublicationName: getEnv("REALTIME_PUBLICATION_NAME", "rapibase_realtime"),
 		RealtimeLockKey:         getEnvInt64("REALTIME_LOCK_KEY", 0),
+
+		// Functions (TS/JS embebido: HTTP + cron + workers)
+		FunctionsEnabled: getEnvBool("FUNCTIONS_ENABLED", true),
+		FunctionsDir:     getEnv("FUNCTIONS_DIR", "./rb_functions"),
 	}
 }
 

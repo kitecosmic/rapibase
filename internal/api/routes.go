@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"log"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/rapibase/rapibase/internal/auth"
 	"github.com/rapibase/rapibase/internal/config"
 	"github.com/rapibase/rapibase/internal/database"
+	"github.com/rapibase/rapibase/internal/functions"
 	mcpserver "github.com/rapibase/rapibase/internal/mcp"
 	"github.com/rapibase/rapibase/internal/storage"
 )
@@ -279,6 +281,19 @@ func SetupRoutes(app *fiber.App, db *database.DB, cfg *config.Config) *WebhookDi
 	mcpHandler := mcpserver.NewHandler(db, storageClient, webhookDispatcher)
 	app.All("/mcp", apiKeyMiddleware.RequireServiceKey(), adaptor.HTTPHandler(mcpHandler))
 	log.Println("MCP endpoint mounted at /mcp")
+
+	// ============================================
+	// FUNCTIONS - TS/JS del usuario dentro de la instancia (HTTP + cron +
+	// workers). Deploy por API con la SERVICE_KEY; ver internal/functions.
+	// ============================================
+	if cfg.FunctionsEnabled {
+		fnSvc := functions.New(db, cfg.FunctionsDir)
+		functions.Setup(app, fnSvc, cfg, jwtManager, apiKeyMiddleware.RequireServiceKey())
+		if err := fnSvc.BootstrapJobs(context.Background()); err != nil {
+			log.Printf("Warning: functions jobs queue disabled: %v", err)
+		}
+		log.Println("Functions runtime mounted at /api/fn (deploy: POST /api/v1/functions)")
+	}
 
 	return webhookDispatcher
 }

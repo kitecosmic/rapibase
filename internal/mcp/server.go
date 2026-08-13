@@ -69,6 +69,20 @@ changes, broadcast, presence) at /api/realtime/v1 — auth via ?apikey=
 is REQUIRED. Full protocol docs: GET /api/realtime/docs (markdown). Use it
 when the app needs live updates instead of polling query_rows.
 
+Functions: server-side TypeScript running inside the instance — custom
+HTTP endpoints (/api/fn/{name}), cron schedules and queue workers, with
+sync APIs (db.query, fetch, env.get("FN_*") secrets, jobs.enqueue).
+Deploy a file with POST /api/v1/functions (multipart "file", service key);
+compile errors come back in the response. Full type definitions:
+GET /api/v1/functions/types. Use functions for logic that must stay
+server-side: third-party API keys, webhooks, background work.
+
+pgvector: the "vector" type is available for embeddings — create a column
+"embedding vector(1536)", an HNSW index with vector_cosine_ops, and query
+nearest neighbours with ORDER BY embedding <=> $1::vector. If
+CREATE EXTENSION failed at boot (older Postgres image), the startup log
+says so.
+
 If this instance is managed by Rapibase Cloud, the project's console
 (Conectar tab) serves a per-project SKILL.md with these URLs and keys
 pre-filled, plus deploy instructions for publishing the frontend.
