@@ -140,6 +140,15 @@ func (db *DB) SetTableRLS(ctx context.Context, table, mode, ownerColumn string) 
 			// Default the owner column to the caller's id so inserts need
 			// not send it and the WITH CHECK passes (like Supabase).
 			fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s SET DEFAULT auth.uid()", qt, qc),
+			// A DELETE only carries the columns in the replica identity,
+			// which defaults to the primary key. Realtime scopes deletes
+			// by comparing the owner column of the OLD image, so without
+			// FULL every delete on an owner table would be dropped and
+			// subscribers would never see rows disappear. Only set here:
+			// the other modes do not read the old image, and silently
+			// reverting an identity the admin may have chosen themselves
+			// (custom mode writes its own SQL) is the worse trade.
+			fmt.Sprintf("ALTER TABLE %s REPLICA IDENTITY FULL", qt),
 			fmt.Sprintf("CREATE POLICY rapibase_owner_sel ON %s FOR SELECT TO rapibase_authenticated USING (%s = auth.uid())", qt, qc),
 			fmt.Sprintf("CREATE POLICY rapibase_owner_ins ON %s FOR INSERT TO rapibase_authenticated WITH CHECK (%s = auth.uid())", qt, qc),
 			fmt.Sprintf("CREATE POLICY rapibase_owner_upd ON %s FOR UPDATE TO rapibase_authenticated USING (%s = auth.uid()) WITH CHECK (%s = auth.uid())", qt, qc, qc),

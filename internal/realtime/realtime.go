@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"sync"
 	"time"
@@ -148,7 +149,7 @@ func (s *Service) Run(ctx context.Context) error {
 
 	if s.cfg.Leader.LockKey == 0 {
 		// Single-node: replicator runs unconditionally.
-		g.Go(func() error { return rep.Run(ctx) })
+		g.Go(func() error { return superviseReplicator(ctx, rep) })
 		return g.Wait()
 	}
 
@@ -170,7 +171,7 @@ func (s *Service) Run(ctx context.Context) error {
 		replDone = done
 		go func() {
 			defer close(done)
-			_ = rep.Run(rctx)
+			_ = superviseReplicator(rctx, rep)
 		}()
 	}
 	stopReplicator := func() {
@@ -202,6 +203,54 @@ func (s *Service) Run(ctx context.Context) error {
 		return err
 	})
 	return g.Wait()
+}
+
+// superviseReplicator keeps the WAL replicator alive for the life of ctx.
+//
+// Replicator.Run returns on the FIRST error it meets — a dropped
+// replication connection, a Postgres restart, a decode failure, a sink
+// error — and it has no internal retry. Without this loop that return
+// value travelled up to a log line and the goroutine simply ended:
+// REST, broadcast, presence and the WebSocket endpoint all kept working
+// while postgres_changes stayed dead until somebody recreated the
+// container. That is the hardest kind of outage to notice, so the
+// replicator is supervised rather than trusted to survive.
+//
+// Backoff is exponential and capped. A run that lasted long enough to be
+// considered healthy resets it, so an instance that reconnects cleanly
+// once does not inherit a 30s delay from an unrelated blip an hour ago.
+//
+// Known gap: Run resumes from the server's current LSN (IdentifySystem),
+// not from the slot's confirmed position, so changes committed during
+// the reconnect window are not replayed. The window is now seconds
+// instead of forever, but it is not zero.
+func superviseReplicator(ctx context.Context, rep *wal.Replicator) error {
+	const (
+		minBackoff = 1 * time.Second
+		maxBackoff = 30 * time.Second
+		healthyRun = 60 * time.Second
+	)
+	backoff := minBackoff
+	for {
+		started := time.Now()
+		err := rep.Run(ctx)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if time.Since(started) >= healthyRun {
+			backoff = minBackoff
+		}
+		log.Printf("⚠️  Realtime: replicator stopped after %s (%v); reconnecting in %s",
+			time.Since(started).Round(time.Millisecond), err, backoff)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(backoff):
+		}
+		if backoff *= 2; backoff > maxBackoff {
+			backoff = maxBackoff
+		}
+	}
 }
 
 // Bootstrap is a convenience wrapper that runs realtime.Bootstrap
@@ -452,4 +501,3 @@ func mapRPCErr(err error) error {
 	}
 	return protocol.NewError(protocol.ErrInternal, err.Error())
 }
-

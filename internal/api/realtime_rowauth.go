@@ -15,10 +15,17 @@ import (
 // table's RLS mode (refreshed periodically from _rapibase_rls) and
 // decides, per event, whether a subscriber may receive it.
 //
-// Tables with no RLS config are allowed through unchanged, so enabling
-// this authorizer never breaks realtime for tables that have not opted
-// into RLS — it only scopes the ones an admin has already secured for
-// REST. Implements hub.RowAuthorizer.
+// The rule mirrors the REST guard in middleware.RequireAPIKey: the anon
+// key alone never reads table data — it needs a user JWT. A table with
+// no RLS config therefore reaches authenticated subscribers (exactly
+// what REST does once RLS is off) but never anonymous ones. Tables in
+// mode "public" are the deliberate opt-out: they stream to anonymous
+// subscribers too, which is what makes public live feeds (order
+// tracking, scoreboards) work without a login.
+//
+// Anything this authorizer cannot evaluate fails closed — notably mode
+// "custom", whose policies are arbitrary SQL living in Postgres, not in
+// this snapshot. Implements hub.RowAuthorizer.
 type rlsRowAuthorizer struct {
 	db   *database.DB
 	snap atomic.Value // map[string]database.RLSConfig keyed by table name
@@ -66,30 +73,44 @@ func (a *rlsRowAuthorizer) Authorize(role, userID, schema, table string, row map
 	if role == realtime.RoleService {
 		return true
 	}
+	authed := userID != "" && role != realtime.RoleAnon
 
 	m, _ := a.snap.Load().(map[string]database.RLSConfig)
 	cfg, ok := m[table]
 	if !ok {
-		// Not RLS-managed: deliver as before (non-breaking default).
-		return true
+		// Not RLS-managed. REST would still demand a JWT alongside the
+		// anon key, so realtime demands one too: authenticated
+		// subscribers get the event, anonymous ones do not.
+		return authed
 	}
 
 	switch cfg.Mode {
 	case database.RLSModePublic:
 		return true
 	case database.RLSModeAuthenticated:
-		return userID != "" && role != realtime.RoleAnon
+		return authed
 	case database.RLSModeOwner:
 		if cfg.OwnerColumn == "" || userID == "" {
 			return false
 		}
 		v, present := row[cfg.OwnerColumn]
 		if !present {
+			// DELETE carries only the replica identity. SetTableRLS puts
+			// owner tables on REPLICA IDENTITY FULL so the column is
+			// there; a table configured before that change is the one
+			// case that lands here, and dropping the event is the safe
+			// half of the trade.
 			return false
 		}
 		return valueEqualsString(v, userID)
+	case database.RLSModeCustom:
+		// Custom policies are SQL evaluated by Postgres on the REST path.
+		// This authorizer cannot run them, and guessing would leak, so
+		// the event is dropped for every non-service subscriber.
+		return false
 	}
-	return true
+	// Unknown mode: fail closed rather than assume it is permissive.
+	return false
 }
 
 // valueEqualsString compares a WAL-decoded column value to the JWT

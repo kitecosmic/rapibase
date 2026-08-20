@@ -36,9 +36,44 @@ Realtime always passes the role to `PermissionChecker.CanRead` /
   readable subset at fan-out — denied columns simply disappear from
   the frame.
 
-In the default rapibase build, the `PermissiveChecker` lets every
-role read every column. When row-level security lands, this becomes
-the policy hook.
+In the default rapibase build the `PermissiveChecker` lets every role
+read every column: column-level permissions are not implemented yet.
+
+Row-level security **is**, and it runs after this step — see below.
+
+## Row-level security
+
+Every `postgres_changes` event is checked per subscriber against the
+table's RLS mode (the same `_rapibase_rls` configuration the REST API
+uses, set from the dashboard or the `set_rls` MCP tool). The rule
+mirrors the REST guard: **the anon key alone never reads table data —
+it needs a user JWT.**
+
+| Table's RLS mode | `anon` (no JWT) | Authenticated user | Service key |
+|---|---|---|---|
+| *not configured* | ✗ | ✓ | ✓ |
+| `public` | ✓ | ✓ | ✓ |
+| `authenticated` | ✗ | ✓ | ✓ |
+| `owner` | ✗ | only rows where `owner_column = auth.uid()` | ✓ |
+| `custom` | ✗ | ✗ | ✓ |
+
+Notes:
+
+- **A table you have not configured still needs a login.** It reaches
+  authenticated subscribers — matching what REST does once RLS is off —
+  but never anonymous ones. Creating a table does not publish it.
+- **`public` is the opt-out for login-free feeds** (order tracking, live
+  scoreboards). It is deliberate, not a default.
+- **`custom` is dropped for every non-service subscriber.** Its policies
+  are arbitrary SQL evaluated by Postgres on the REST path; realtime
+  cannot run them, and guessing would leak the table. If you need a
+  custom-policy table live, expose it through a `public`/`owner` view or
+  push the change yourself with `broadcast` from a function.
+- `owner` tables are switched to `REPLICA IDENTITY FULL` automatically so
+  DELETE events carry the owner column. Without it Postgres only ships
+  the primary key on a delete and the event could not be scoped.
+- The mode snapshot refreshes every 30s, so an RLS change takes up to
+  half a minute to reach live subscribers.
 
 ## Token rotation: `setAuth`
 

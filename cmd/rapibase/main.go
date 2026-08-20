@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
@@ -19,6 +20,7 @@ import (
 	"github.com/rapibase/rapibase/internal/api/middleware"
 	"github.com/rapibase/rapibase/internal/config"
 	"github.com/rapibase/rapibase/internal/database"
+	"github.com/rapibase/rapibase/internal/realtime"
 )
 
 func main() {
@@ -187,11 +189,18 @@ func keyTail(s string) string {
 	return s[len(s)-n:]
 }
 
-// startRealtime builds the realtime.Service, runs Bootstrap against
-// Postgres, then launches Service.Run on its own goroutine. Any
-// failure (bad WAL config, missing slot creation rights, etc.) is
-// logged loudly but does not abort startup — the rest of the API
-// keeps working.
+// startRealtime builds the realtime.Service and hands Bootstrap + Run to
+// their own goroutine. Any failure is logged loudly but never aborts
+// startup — the rest of the API keeps working.
+//
+// Bootstrap is retried instead of attempted once. A single failed attempt
+// used to disable postgres_changes for the whole life of the process
+// while REST, broadcast and presence carried on serving, so the instance
+// looked healthy and only the "live" parts were dead — with one log line
+// an hour into the past as the only clue. The causes are all transient or
+// operator-fixable (Postgres not accepting connections yet, wal_level
+// still on replica, replication rights missing), so the loop keeps trying
+// and the instance heals itself once the cause is gone.
 func startRealtime(ctx context.Context, app *fiber.App, db *database.DB, cfg *config.Config) {
 	svc, err := api.SetupRealtime(ctx, app, db, cfg)
 	if err != nil {
@@ -199,21 +208,46 @@ func startRealtime(ctx context.Context, app *fiber.App, db *database.DB, cfg *co
 		return
 	}
 
-	if err := svc.Bootstrap(ctx, cfg.DatabaseURL); err != nil {
-		log.Printf("⚠️  Realtime: bootstrap failed, replicator will not start: %v", err)
-		log.Printf("    Hint: set wal_level=logical and grant REPLICATION to the rapibase role.")
-		// The WebSocket endpoint is mounted but the replicator stays
-		// off; clients can still subscribe to broadcast/presence/rpc
-		// channels — only postgres_changes is unavailable.
-		return
-	}
-
-	log.Printf("✅ Realtime: bootstrap OK (slot=%s publication=%s)",
-		cfg.RealtimeSlotName, cfg.RealtimePublicationName)
-
 	go func() {
+		// Until this succeeds the WebSocket endpoint is mounted and
+		// broadcast/presence/rpc work; only postgres_changes waits.
+		if err := bootstrapWithRetry(ctx, svc, cfg); err != nil {
+			return // ctx cancelled — shutting down
+		}
+		log.Printf("✅ Realtime: bootstrap OK (slot=%s publication=%s)",
+			cfg.RealtimeSlotName, cfg.RealtimePublicationName)
+
 		if err := svc.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("⚠️  Realtime: service exited with error: %v", err)
 		}
 	}()
+}
+
+// bootstrapWithRetry runs the realtime Postgres bootstrap until it
+// succeeds or ctx is cancelled, with capped exponential backoff.
+func bootstrapWithRetry(ctx context.Context, svc *realtime.Service, cfg *config.Config) error {
+	const (
+		minBackoff = 2 * time.Second
+		maxBackoff = 60 * time.Second
+	)
+	backoff := minBackoff
+	for {
+		err := svc.Bootstrap(ctx, cfg.DatabaseURL)
+		if err == nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		log.Printf("⚠️  Realtime: bootstrap failed, retrying in %s: %v", backoff, err)
+		log.Printf("    Hint: set wal_level=logical and grant REPLICATION to the rapibase role.")
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(backoff):
+		}
+		if backoff *= 2; backoff > maxBackoff {
+			backoff = maxBackoff
+		}
+	}
 }
