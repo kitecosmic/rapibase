@@ -357,6 +357,13 @@ func (db *DB) Migrate() error {
 		}
 	}
 
+	// Storage access rules (RLS on storage_objects). Non-fatal like the
+	// rest of the RLS bootstrap: without the roles the public storage
+	// API fails closed instead of the instance failing to start.
+	if err := db.migrateStoragePolicies(ctx); err != nil {
+		log.Printf("⚠️  storage access rules not installed (public storage API will deny app users): %v", err)
+	}
+
 	// Realtime requires the connecting role to have the REPLICATION
 	// attribute so it can open a logical replication slot. Superusers
 	// (the default in the docker-compose) already have it; non-super

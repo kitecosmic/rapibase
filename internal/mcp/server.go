@@ -60,7 +60,9 @@ Recommended flow:
    file's owner, or a signed URL). create_bucket / update_bucket set that
    plus per-file size and MIME limits; upload_object / download_object
    exchange base64 (downloads up to 10 MB); create_signed_url hands out a
-   temporary keyless link for any file.
+   temporary keyless link for any file. For access beyond "owner or
+   public" (team folders, sharing), set_storage_rule adds SQL rules that
+   Postgres enforces as row-level security on the files.
 7. Row-level security: list_rls shows which tables are protected;
    set_rls(table, mode, owner_column) configures it (modes: owner /
    authenticated / public / custom) and disable_rls removes it. Use mode

@@ -13,6 +13,7 @@ export const STORAGE_INTRO = `Files live in buckets. The rules — whether a buc
 - **Private bucket** (default): readable with the SERVICE_KEY, by the file's **owner** (ANON_KEY + the user's JWT), or through a **signed URL** (temporary, no keys).
 - **Owner**: a file uploaded with ANON_KEY + JWT belongs to that user — only they can read it (private buckets), replace it or delete it. Service-key uploads have no owner unless you pass \`owner_id\`.
 - **Limits per bucket**: \`file_size_limit\` (bytes) and \`allowed_mime_types\` (e.g. \`["image/*", "application/pdf"]\`). Uploads that break them get 413 / 415.
+- **Access rules**: for anything beyond "owner or public" (team folders, chat participants, shared projects…) add SQL rules per bucket. They are real Postgres row-level security on the files, evaluated as the app user.
 - Downloads support \`Range\` (seekable video/audio), \`ETag\` / 304 and caching. HTML and SVG are served sandboxed, so an uploaded file can never run script on your domain.`
 
 export const STORAGE_SECTIONS: StorageDocSection[] = [
@@ -78,6 +79,28 @@ Body: { "upsert": true }
 PUT <signed_url>
 Content-Type: image/png
 <file bytes>          (or multipart/form-data with a "file" field)`,
+  },
+  {
+    title: 'Access rules (service key)',
+    note: 'SQL conditions checked for each file as the app user. Columns: bucket_id, name (full path), owner, size, mime_type, metadata. Functions: auth.uid(), auth.email(), auth.jwt(), storage.foldername(name), storage.filename(name), storage.extension(name) — plus any table the user can read (its own RLS applies). Permissive rules grant access on top of the built-in ones (public buckets; uploader owns their files while the bucket has owner_access on). Restrictive rules are extra requirements every access must meet.',
+    code: `GET    /api/v1/storage/rules?bucket=docs
+POST   /api/v1/storage/rules
+DELETE /api/v1/storage/rules/{name}
+Headers: { "apikey": "SERVICE_KEY" }
+
+// Team folders: members read and upload files under "{team_id}/"
+POST /api/v1/storage/rules
+{ "name": "team_read", "bucket": "docs", "operation": "read",
+  "condition": "EXISTS (SELECT 1 FROM team_members m WHERE m.user_id = auth.uid() AND m.team_id::text = (storage.foldername(name))[1])" }
+{ "name": "team_upload", "bucket": "docs", "operation": "upload",
+  "condition": "owner = auth.uid() AND EXISTS (SELECT 1 FROM team_members m WHERE m.user_id = auth.uid() AND m.team_id::text = (storage.foldername(name))[1])" }
+
+// Only the files' own folder, on top of the default owner model
+{ "name": "own_folder", "bucket": "avatars", "operation": "upload", "restrictive": true,
+  "condition": "(storage.foldername(name))[1] = auth.uid()::text" }
+
+// operation: read | upload | update (replace file or metadata) | delete | all
+// Rely only on your rules: PATCH /api/v1/storage/buckets/docs { "owner_access": false }`,
   },
   {
     title: 'Download, list, delete',

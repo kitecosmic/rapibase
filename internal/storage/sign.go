@@ -43,6 +43,9 @@ type Grant struct {
 	// existing object may be replaced.
 	Owner  string `json:"o,omitempty"`
 	Upsert bool   `json:"u,omitempty"`
+	// Claims of the user who asked for an upload URL, so the access
+	// rules are evaluated as them when the file arrives.
+	Claims string `json:"c,omitempty"`
 }
 
 type Signer struct{ key []byte }

@@ -280,6 +280,9 @@ func SetupRoutes(app *fiber.App, db *database.DB, cfg *config.Config) *WebhookDi
 			storageAdmin.Get("/buckets/:name/objects/*", storageHandler.GetObject)
 			storageAdmin.Delete("/buckets/:name/objects/*", storageHandler.DeleteObject)
 			storageAdmin.Get("/buckets/:name/presign/*", storageHandler.GetPresignedURL)
+			storageAdmin.Get("/rules", storageHandler.ListRules)
+			storageAdmin.Post("/rules", storageHandler.SetRule)
+			storageAdmin.Delete("/rules/:rule", storageHandler.DeleteRule)
 
 			// Keyless routes. Registered BEFORE the keyed group below:
 			// Fiber runs handlers in registration order, so these answer
@@ -296,6 +299,9 @@ func SetupRoutes(app *fiber.App, db *database.DB, cfg *config.Config) *WebhookDi
 			storageAPI.Get("/buckets/:name", storageHandler.GetBucketAPI)
 			storageAPI.Patch("/buckets/:name", storageHandler.UpdateBucketAPI)
 			storageAPI.Delete("/buckets/:name", storageHandler.DeleteBucketAPI)
+			storageAPI.Get("/rules", storageHandler.ListRulesAPI)
+			storageAPI.Post("/rules", storageHandler.SetRuleAPI)
+			storageAPI.Delete("/rules/:rule", storageHandler.DeleteRuleAPI)
 			storageAPI.Post("/sign/:bucket", storageHandler.CreateSignedURLs)
 			storageAPI.Post("/sign/:bucket/*", storageHandler.CreateSignedURL)
 			storageAPI.Post("/upload/sign/:bucket/*", storageHandler.CreateSignedUploadURL)

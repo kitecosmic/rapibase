@@ -454,6 +454,7 @@ export interface StorageBucket {
   public: boolean
   file_size_limit: number | null
   allowed_mime_types: string[]
+  owner_access: boolean
   object_count: number
   total_size: number
   created_at: string
@@ -477,6 +478,18 @@ export interface BucketSettings {
   public?: boolean
   file_size_limit?: number // bytes; 0 removes the limit
   allowed_mime_types?: string[] // [] allows every type
+  owner_access?: boolean // files belong to their uploader (default true)
+}
+
+export type RuleOperation = 'read' | 'upload' | 'update' | 'delete' | 'all'
+
+export interface AccessRule {
+  name: string
+  bucket?: string // empty = every bucket
+  operation: RuleOperation
+  condition: string // SQL checked per file row
+  restrictive: boolean
+  builtin?: boolean
 }
 
 // Object paths may contain spaces, accents or '#': encode each segment.
@@ -549,6 +562,14 @@ export const storage = {
       method: 'POST',
       body: JSON.stringify({ from, to, destination_bucket: destBucket }),
     }),
+
+  listRules: (bucket?: string) =>
+    request<{ rules: AccessRule[] }>(`/storage/rules${bucket ? `?bucket=${bucket}` : ''}`),
+
+  setRule: (rule: AccessRule) =>
+    request<any>('/storage/rules', { method: 'POST', body: JSON.stringify(rule) }),
+
+  deleteRule: (name: string) => request<any>(`/storage/rules/${name}`, { method: 'DELETE' }),
 }
 
 // ---------------------------------------------------------------------

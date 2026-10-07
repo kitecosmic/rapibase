@@ -38,15 +38,17 @@ func NewService(s3 *Client, db *database.DB, jwtSecret, appURL string) *Service 
 	}
 }
 
-// Actor is who is asking: the service key (full access) or an app user.
+// Actor is who is asking: the service key / dashboard (full access) or
+// an app user, whose requests are checked against the storage access
+// rules in Postgres (see database/storage_policies.go).
 type Actor struct {
 	Service bool
 	UserID  string
+	// Claims is the user's JWT claims as JSON; the rules run as them.
+	Claims string
 }
 
-func (a Actor) owns(o *database.StorageObject) bool {
-	return a.UserID != "" && o != nil && o.Owner != nil && *o.Owner == a.UserID
-}
+func (a Actor) isUser() bool { return !a.Service && a.UserID != "" && a.Claims != "" }
 
 // Object is the public view of a stored file.
 type Object struct {
@@ -122,9 +124,13 @@ func (s *Service) SignedURL(bucket, key string, ttl time.Duration, download stri
 
 // SignedUploadURL returns a link that uploads exactly one object (PUT),
 // owned by owner, without any key.
-func (s *Service) SignedUploadURL(bucket, key, owner string, upsert bool) (string, string, time.Time) {
+func (s *Service) SignedUploadURL(bucket, key string, a Actor, owner string, upsert bool) (string, string, time.Time) {
 	exp := time.Now().Add(SignedUploadTTL)
-	tok := s.signer.Sign(Grant{Op: OpUpload, Bucket: bucket, Key: key, Exp: exp.Unix(), Owner: owner, Upsert: upsert})
+	g := Grant{Op: OpUpload, Bucket: bucket, Key: key, Exp: exp.Unix(), Owner: owner, Upsert: upsert}
+	if !a.Service {
+		g.Owner, g.Claims = a.UserID, a.Claims
+	}
+	tok := s.signer.Sign(g)
 	return s.baseURL + "/api/v1/storage/upload/sign/" + bucket + "/" + EscapeKey(key) + "?token=" + tok, tok, exp
 }
 
@@ -149,6 +155,9 @@ type BucketSettings struct {
 	Public           *bool     `json:"public"`
 	FileSizeLimit    *int64    `json:"file_size_limit"`
 	AllowedMimeTypes *[]string `json:"allowed_mime_types"`
+	// OwnerAccess (default true): each file belongs to its uploader, who
+	// can read, replace and delete it. Off: only the bucket's access rules.
+	OwnerAccess *bool `json:"owner_access"`
 }
 
 func (s *Service) ListBuckets(ctx context.Context) ([]database.StorageBucket, error) {
@@ -171,12 +180,16 @@ func (s *Service) bucket(ctx context.Context, name string) (*database.StorageBuc
 	return b, err
 }
 
-func resolveSettings(cur *database.StorageBucket, set BucketSettings) (public bool, limit *int64, mimes []string, err error) {
+func resolveSettings(cur *database.StorageBucket, set BucketSettings) (public bool, limit *int64, mimes []string, ownerAccess bool, err error) {
+	ownerAccess = true
 	if cur != nil {
-		public, limit, mimes = cur.Public, cur.FileSizeLimit, cur.AllowedMimeTypes
+		public, limit, mimes, ownerAccess = cur.Public, cur.FileSizeLimit, cur.AllowedMimeTypes, cur.OwnerAccess
 	}
 	if set.Public != nil {
 		public = *set.Public
+	}
+	if set.OwnerAccess != nil {
+		ownerAccess = *set.OwnerAccess
 	}
 	if set.FileSizeLimit != nil {
 		if *set.FileSizeLimit > 0 {
@@ -188,10 +201,10 @@ func resolveSettings(cur *database.StorageBucket, set BucketSettings) (public bo
 	}
 	if set.AllowedMimeTypes != nil {
 		if mimes, err = NormalizeMimeList(*set.AllowedMimeTypes); err != nil {
-			return false, nil, nil, err
+			return false, nil, nil, false, err
 		}
 	}
-	return public, limit, mimes, nil
+	return public, limit, mimes, ownerAccess, nil
 }
 
 func (s *Service) CreateBucket(ctx context.Context, name string, set BucketSettings) (*database.StorageBucket, error) {
@@ -202,14 +215,14 @@ func (s *Service) CreateBucket(ctx context.Context, name string, set BucketSetti
 	if _, err := s.db.GetStorageBucket(ctx, name); err == nil {
 		return nil, ErrBucketExists
 	}
-	public, limit, mimes, err := resolveSettings(nil, set)
+	public, limit, mimes, ownerAccess, err := resolveSettings(nil, set)
 	if err != nil {
 		return nil, err
 	}
 	if err := s.s3.MakeBucket(ctx, name); err != nil {
 		return nil, err
 	}
-	b, err := s.db.CreateStorageBucket(ctx, name, public, limit, mimes)
+	b, err := s.db.CreateStorageBucket(ctx, name, public, limit, mimes, ownerAccess)
 	if err != nil {
 		return nil, err
 	}
@@ -221,11 +234,11 @@ func (s *Service) UpdateBucket(ctx context.Context, name string, set BucketSetti
 	if err != nil {
 		return nil, err
 	}
-	public, limit, mimes, err := resolveSettings(cur, set)
+	public, limit, mimes, ownerAccess, err := resolveSettings(cur, set)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.db.UpdateStorageBucket(ctx, name, public, limit, mimes); err != nil {
+	if err := s.db.UpdateStorageBucket(ctx, name, public, limit, mimes, ownerAccess); err != nil {
 		return nil, err
 	}
 	return s.GetBucket(ctx, name)
@@ -312,32 +325,76 @@ func tooLarge(limit int64) *Error {
 		"the file exceeds this bucket's size limit (%d bytes)", limit)
 }
 
-// checkWrite applies the replace rules for key: without upsert an
-// existing object is a conflict, and an app user can only replace a
-// file they own (files with no owner belong to the service key).
-func (s *Service) checkWrite(ctx context.Context, a Actor, bucket, key string, upsert bool) (*database.StorageObject, error) {
+// checkWrite decides whether a may write bucket/key with the given
+// content. App users go through the access rules: creating a file is an
+// INSERT check, replacing one an UPDATE check (cand carries the new
+// size, type and metadata, so rules can look at them). Without upsert an
+// existing file is a conflict. A file that exists in the backend but was
+// never recorded belongs to the service key.
+func (s *Service) checkWrite(ctx context.Context, a Actor, bucket, key string, upsert bool, cand database.StorageRow) (*database.StorageObject, error) {
 	row, err := s.db.GetStorageObject(ctx, bucket, key)
 	if err != nil && !errors.Is(err, database.ErrNotFound) {
 		return nil, err
 	}
-	exists := row != nil
-	if !exists {
+	if row == nil {
 		if _, err := s.s3.Stat(ctx, bucket, key); err == nil {
-			exists = true
+			if !a.Service {
+				return nil, ErrForbidden
+			}
+			if !upsert {
+				return nil, ErrObjectExists
+			}
+			return nil, nil
 		} else if !errors.Is(err, ErrObjectNotFound) {
 			return nil, err
 		}
-	}
-	if !exists {
+		if a.Service {
+			return nil, nil
+		}
+		if !a.isUser() {
+			return nil, ErrForbidden
+		}
+		owner := a.UserID
+		cand.Owner = &owner
+		ok, err := s.db.StorageCanInsert(ctx, a.Claims, bucket, key, cand)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, ErrForbidden
+		}
 		return nil, nil
 	}
-	if !a.Service && !a.owns(row) {
-		return nil, ErrForbidden
+	if !a.Service {
+		if !a.isUser() {
+			return nil, ErrForbidden
+		}
+		cand.Owner = nil // replacing keeps the owner
+		ok, err := s.db.StorageCanUpdate(ctx, a.Claims, bucket, key, cand)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, ErrForbidden
+		}
 	}
 	if !upsert {
 		return nil, ErrObjectExists
 	}
 	return row, nil
+}
+
+// CheckUpload answers, before any byte is sent, whether a may upload to
+// bucket/key (used when handing out a signed upload URL).
+func (s *Service) CheckUpload(ctx context.Context, a Actor, bucket, key string, upsert bool) error {
+	if err := ValidateKey(key); err != nil {
+		return err
+	}
+	if _, err := s.bucket(ctx, bucket); err != nil {
+		return err
+	}
+	_, err := s.checkWrite(ctx, a, bucket, key, upsert, database.StorageRow{MimeType: DetectContentType("", key)})
+	return err
 }
 
 func (s *Service) Upload(ctx context.Context, in UploadInput) (*Object, error) {
@@ -347,6 +404,9 @@ func (s *Service) Upload(ctx context.Context, in UploadInput) (*Object, error) {
 	b, err := s.bucket(ctx, in.Bucket)
 	if err != nil {
 		return nil, err
+	}
+	if !in.Actor.Service {
+		in.Owner = in.Actor.UserID // app users always own what they upload
 	}
 	if in.Owner != "" && !uuidRe.MatchString(in.Owner) {
 		return nil, newErr(http.StatusBadRequest, "invalid_owner", "owner_id must be a user UUID")
@@ -363,7 +423,8 @@ func (s *Service) Upload(ctx context.Context, in UploadInput) (*Object, error) {
 	if limit > 0 && in.Size > limit {
 		return nil, tooLarge(limit)
 	}
-	existing, err := s.checkWrite(ctx, in.Actor, in.Bucket, in.Key, in.Upsert)
+	cand := database.StorageRow{Size: max(in.Size, 0), MimeType: contentType, Metadata: in.Metadata}
+	existing, err := s.checkWrite(ctx, in.Actor, in.Bucket, in.Key, in.Upsert, cand)
 	if err != nil {
 		return nil, err
 	}
@@ -377,8 +438,11 @@ func (s *Service) Upload(ctx context.Context, in UploadInput) (*Object, error) {
 		return nil, err
 	}
 
+	// A new file belongs to its uploader. Replacing one keeps its owner —
+	// a rule may let a teammate edit a file without taking it over — and
+	// only the service key can hand a file to someone else.
 	var owner *string
-	if in.Owner != "" {
+	if in.Owner != "" && (existing == nil || in.Actor.Service) {
 		owner = &in.Owner
 	}
 	row, err := s.db.UpsertStorageObject(ctx, in.Bucket, in.Key, owner, body.n, contentType, etag, in.Metadata)
@@ -393,7 +457,8 @@ func (s *Service) Upload(ctx context.Context, in UploadInput) (*Object, error) {
 }
 
 // CanRead reports whether a may read bucket/key: the service key always,
-// anyone when the bucket is public, otherwise only the file's owner.
+// anyone when the bucket is public, otherwise whatever the access rules
+// say (by default: the file's owner).
 func (s *Service) CanRead(ctx context.Context, a Actor, bucket, key string) (bool, error) {
 	if a.Service {
 		return true, nil
@@ -405,13 +470,30 @@ func (s *Service) CanRead(ctx context.Context, a Actor, bucket, key string) (boo
 	if b.Public {
 		return true, nil
 	}
-	return s.CanWrite(ctx, a, bucket, key)
+	if !a.isUser() {
+		return false, nil
+	}
+	return s.db.StorageCanRead(ctx, a.Claims, bucket, key)
 }
 
-// CanWrite reports whether a may change or delete bucket/key.
-func (s *Service) CanWrite(ctx context.Context, a Actor, bucket, key string) (bool, error) {
+// CanDelete reports whether a may delete bucket/key.
+func (s *Service) CanDelete(ctx context.Context, a Actor, bucket, key string) (bool, error) {
 	if a.Service {
 		return true, nil
+	}
+	if !a.isUser() {
+		return false, nil
+	}
+	return s.db.StorageCanDelete(ctx, a.Claims, bucket, key)
+}
+
+// CanUpdateMetadata reports whether a may change bucket/key's metadata.
+func (s *Service) CanUpdateMetadata(ctx context.Context, a Actor, bucket, key string, metadata map[string]interface{}) (bool, error) {
+	if a.Service {
+		return true, nil
+	}
+	if !a.isUser() {
+		return false, nil
 	}
 	row, err := s.db.GetStorageObject(ctx, bucket, key)
 	if errors.Is(err, database.ErrNotFound) {
@@ -420,7 +502,10 @@ func (s *Service) CanWrite(ctx context.Context, a Actor, bucket, key string) (bo
 	if err != nil {
 		return false, err
 	}
-	return a.owns(row), nil
+	if metadata == nil {
+		metadata = map[string]interface{}{}
+	}
+	return s.db.StorageCanUpdate(ctx, a.Claims, bucket, key, database.StorageRow{Size: row.Size, MimeType: row.MimeType, Metadata: metadata})
 }
 
 // IsPublic reports whether bucket exists and is public.
@@ -460,8 +545,10 @@ func (s *Service) ObjectInfo(ctx context.Context, bucket, key string) (*Object, 
 	return s.view(row, b.Public), nil
 }
 
-// ListRecorded lists recorded objects; owner != "" limits it to a user.
-func (s *Service) ListRecorded(ctx context.Context, bucket, prefix, owner string, limit, offset int) ([]*Object, error) {
+// ListRecorded lists recorded objects under prefix. For app users the
+// access rules filter the rows (by default: their own files, or every
+// file of a public bucket).
+func (s *Service) ListRecorded(ctx context.Context, a Actor, bucket, prefix string, limit, offset int) ([]*Object, error) {
 	b, err := s.bucket(ctx, bucket)
 	if err != nil {
 		return nil, err
@@ -473,10 +560,13 @@ func (s *Service) ListRecorded(ctx context.Context, bucket, prefix, owner string
 		offset = 0
 	}
 	var rows []database.StorageObject
-	if owner != "" {
-		rows, err = s.db.ListStorageObjectsByOwnerBucket(ctx, owner, bucket, prefix, limit, offset)
-	} else {
+	switch {
+	case a.Service:
 		rows, err = s.db.ListStorageObjects(ctx, bucket, prefix, limit, offset)
+	case a.isUser():
+		rows, err = s.db.ListStorageObjectsAs(ctx, a.Claims, bucket, prefix, limit, offset)
+	default:
+		rows = []database.StorageObject{}
 	}
 	if err != nil {
 		return nil, err
@@ -488,32 +578,44 @@ func (s *Service) ListRecorded(ctx context.Context, bucket, prefix, owner string
 	return out, nil
 }
 
-// Search finds objects whose metadata key equals value; owner != ""
-// limits the result to that user's files.
-func (s *Service) Search(ctx context.Context, bucket, key, value, owner string) ([]*Object, error) {
+// Search finds objects whose metadata key equals value (filtered by the
+// access rules for app users).
+func (s *Service) Search(ctx context.Context, a Actor, bucket, key, value string) ([]*Object, error) {
 	b, err := s.bucket(ctx, bucket)
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.db.SearchStorageObjectsByMetadata(ctx, bucket, key, value)
+	var rows []database.StorageObject
+	switch {
+	case a.Service:
+		rows, err = s.db.SearchStorageObjectsByMetadata(ctx, bucket, key, value)
+	case a.isUser():
+		rows, err = s.db.SearchStorageObjectsAs(ctx, a.Claims, bucket, key, value)
+	}
 	if err != nil {
 		return nil, err
 	}
-	out := []*Object{}
+	out := make([]*Object, len(rows))
 	for i := range rows {
-		if owner == "" || (rows[i].Owner != nil && *rows[i].Owner == owner) {
-			out = append(out, s.view(&rows[i], b.Public))
-		}
+		out[i] = s.view(&rows[i], b.Public)
 	}
 	return out, nil
 }
 
-// ListByOwner returns every file of a user across buckets.
-func (s *Service) ListByOwner(ctx context.Context, owner string) ([]*Object, error) {
+// ListByOwner returns every file of a user across buckets — for app
+// users, only the ones the access rules let them see.
+func (s *Service) ListByOwner(ctx context.Context, a Actor, owner string) ([]*Object, error) {
 	if !uuidRe.MatchString(owner) {
 		return []*Object{}, nil
 	}
-	rows, err := s.db.ListStorageObjectsByOwner(ctx, owner)
+	var rows []database.StorageObject
+	var err error
+	switch {
+	case a.Service:
+		rows, err = s.db.ListStorageObjectsByOwner(ctx, owner)
+	case a.isUser():
+		rows, err = s.db.ListStorageObjectsByOwnerAs(ctx, a.Claims, owner)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -604,8 +706,8 @@ func (s *Service) CopyObject(ctx context.Context, a Actor, srcBucket, srcKey, ds
 	if err != nil {
 		return nil, err
 	}
-	if move {
-		allowed, err = s.CanWrite(ctx, a, srcBucket, srcKey)
+	if allowed && move {
+		allowed, err = s.CanDelete(ctx, a, srcBucket, srcKey)
 		if err != nil {
 			return nil, err
 		}
@@ -623,17 +725,17 @@ func (s *Service) CopyObject(ctx context.Context, a Actor, srcBucket, srcKey, ds
 	if dst.FileSizeLimit != nil && *dst.FileSizeLimit > 0 && st.Size > *dst.FileSizeLimit {
 		return nil, tooLarge(*dst.FileSizeLimit)
 	}
-	if _, err := s.checkWrite(ctx, a, dstBucket, dstKey, upsert); err != nil {
-		return nil, err
-	}
-	if err := s.s3.Copy(ctx, srcBucket, srcKey, dstBucket, dstKey); err != nil {
-		return nil, err
-	}
-
 	var owner *string
 	var meta map[string]interface{}
 	if row, err := s.db.GetStorageObject(ctx, srcBucket, srcKey); err == nil {
 		owner, meta = row.Owner, row.Metadata
+	}
+	cand := database.StorageRow{Size: st.Size, MimeType: st.ContentType, Metadata: meta}
+	if _, err := s.checkWrite(ctx, a, dstBucket, dstKey, upsert, cand); err != nil {
+		return nil, err
+	}
+	if err := s.s3.Copy(ctx, srcBucket, srcKey, dstBucket, dstKey); err != nil {
+		return nil, err
 	}
 	if !a.Service {
 		owner = &a.UserID
@@ -746,6 +848,67 @@ func (s *Service) ListFolder(ctx context.Context, bucket, prefix string, withLin
 		return entries[i].Name < entries[j].Name
 	})
 	return entries, nil
+}
+
+// ---- access rules -----------------------------------------------------------
+
+// AccessRule is a custom storage access rule: a SQL condition checked
+// against each file row (bucket_id, name, owner, size, mime_type,
+// metadata) for app users, with auth.uid(), auth.jwt(),
+// storage.foldername(name)… and any table they can read.
+type AccessRule struct {
+	Name        string `json:"name"`
+	Bucket      string `json:"bucket"`    // "" = every bucket
+	Operation   string `json:"operation"` // read | upload | update | delete | all
+	Condition   string `json:"condition"`
+	Restrictive bool   `json:"restrictive"` // narrows access instead of widening it
+}
+
+// ListRules returns the rules on storage files; bucket != "" keeps the
+// ones that apply to it (its own, plus rules for every bucket).
+func (s *Service) ListRules(ctx context.Context, bucket string) ([]database.StoragePolicy, error) {
+	all, err := s.db.ListStoragePolicies(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if bucket == "" {
+		return all, nil
+	}
+	out := []database.StoragePolicy{}
+	for _, p := range all {
+		if p.Bucket == bucket || p.Bucket == "" {
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}
+
+func policyErr(err error) error {
+	var pe *database.ErrPolicy
+	if errors.As(err, &pe) {
+		return newErr(http.StatusBadRequest, "invalid_rule", "%s", pe.Msg)
+	}
+	if errors.Is(err, database.ErrNotFound) {
+		return newErr(http.StatusNotFound, "rule_not_found", "no access rule with that name")
+	}
+	return err
+}
+
+// SetRule creates or replaces a rule (same name = replace).
+func (s *Service) SetRule(ctx context.Context, r AccessRule) error {
+	if r.Bucket != "" {
+		if _, err := s.bucket(ctx, r.Bucket); err != nil {
+			return err
+		}
+	}
+	if r.Operation == "" {
+		r.Operation = "read"
+	}
+	return policyErr(s.db.CreateStoragePolicy(ctx, r.Name, r.Bucket, r.Operation, r.Condition, r.Restrictive))
+}
+
+func (s *Service) DeleteRule(ctx context.Context, name string) error {
+	return policyErr(s.db.DeleteStoragePolicy(ctx, name))
 }
 
 // ---- startup reconciliation -----------------------------------------------

@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { storage, type StorageBucket, type StorageEntry, type BucketSettings } from '../lib/api'
+import { storage, type StorageBucket, type StorageEntry, type BucketSettings, type AccessRule, type RuleOperation } from '../lib/api'
 import {
   HardDrive,
   Plus,
@@ -26,6 +26,7 @@ import {
   Settings,
   AlertTriangle,
   Check,
+  Shield,
 } from 'lucide-react'
 
 const formatBytes = (bytes: number): string => {
@@ -70,18 +71,21 @@ const LINK_EXPIRIES: [number, string][] = [
 
 interface SettingsDraft {
   public: boolean
+  ownerAccess: boolean
   maxSizeMB: string
   mimeTypes: string
 }
 
 const draftFrom = (b?: StorageBucket): SettingsDraft => ({
   public: b?.public ?? false,
+  ownerAccess: b?.owner_access ?? true,
   maxSizeMB: b?.file_size_limit ? String(+(b.file_size_limit / 1024 / 1024).toFixed(2)) : '',
   mimeTypes: (b?.allowed_mime_types ?? []).join(', '),
 })
 
 const settingsFrom = (d: SettingsDraft): BucketSettings => ({
   public: d.public,
+  owner_access: d.ownerAccess,
   file_size_limit: d.maxSizeMB.trim() ? Math.round(parseFloat(d.maxSizeMB) * 1024 * 1024) : 0,
   allowed_mime_types: d.mimeTypes
     .split(',')
@@ -113,6 +117,21 @@ function BucketSettingsFields({ draft, onChange }: { draft: SettingsDraft; onCha
         )}
       </div>
       <div>
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={draft.ownerAccess}
+            onChange={(e) => onChange({ ...draft, ownerAccess: e.target.checked })}
+            className="rounded"
+          />
+          <span className="text-sm font-medium text-gray-700">Files belong to their uploader</span>
+        </label>
+        <p className="mt-1 text-xs text-gray-500 ml-6">
+          A logged-in user can upload files that are theirs, and read, replace and delete their own. Turn it off to rely only on
+          this bucket's access rules.
+        </p>
+      </div>
+      <div>
         <label className="block text-sm font-medium text-gray-700 mb-1">Max file size (MB)</label>
         <input
           type="number"
@@ -139,17 +158,193 @@ function BucketSettingsFields({ draft, onChange }: { draft: SettingsDraft; onCha
   )
 }
 
-function Modal({ title, onClose, children, footer }: { title: string; onClose: () => void; children: React.ReactNode; footer: React.ReactNode }) {
+// ---- access rules ----------------------------------------------------------
+
+const OPERATIONS: [RuleOperation, string][] = [
+  ['read', 'Read'],
+  ['upload', 'Upload'],
+  ['update', 'Replace / edit'],
+  ['delete', 'Delete'],
+  ['all', 'Everything'],
+]
+
+const RULE_EXAMPLES: { label: string; operation: RuleOperation; condition: string }[] = [
+  {
+    label: 'Team members, folder per team',
+    operation: 'read',
+    condition: 'EXISTS (SELECT 1 FROM team_members m WHERE m.user_id = auth.uid() AND m.team_id::text = (storage.foldername(name))[1])',
+  },
+  { label: 'Each user only in their own folder', operation: 'upload', condition: '(storage.foldername(name))[1] = auth.uid()::text' },
+  { label: 'Any logged-in user', operation: 'read', condition: 'auth.uid() IS NOT NULL' },
+  { label: 'Only some extensions', operation: 'upload', condition: "storage.extension(name) IN ('png', 'jpg', 'pdf')" },
+]
+
+function BucketRules({ bucket }: { bucket: string }) {
+  const queryClient = useQueryClient()
+  const [adding, setAdding] = useState(false)
+  const [rule, setRule] = useState<AccessRule>({ name: '', operation: 'read', condition: '', restrictive: false })
+  const [error, setError] = useState('')
+  const { data, isLoading } = useQuery({ queryKey: ['storage-rules', bucket], queryFn: () => storage.listRules(bucket) })
+  const rules = (data?.rules ?? []).filter((r) => !r.builtin)
+  const refresh = () => queryClient.invalidateQueries({ queryKey: ['storage-rules', bucket] })
+
+  const save = useMutation({
+    mutationFn: () => storage.setRule({ ...rule, bucket }),
+    onSuccess: () => {
+      refresh()
+      setAdding(false)
+      setError('')
+      setRule({ name: '', operation: 'read', condition: '', restrictive: false })
+    },
+    onError: (e) => setError(errorText(e)),
+  })
+  const remove = useMutation({ mutationFn: (name: string) => storage.deleteRule(name), onSuccess: refresh, onError: (e) => setError(errorText(e)) })
+
+  return (
+    <div className="mt-6 border-t border-gray-200 pt-5">
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-1.5">
+          <Shield className="w-4 h-4" />
+          Access rules
+        </h3>
+        {!adding && (
+          <button onClick={() => setAdding(true)} className="flex items-center gap-1 text-sm text-blue-600 hover:text-blue-700">
+            <Plus className="w-4 h-4" />
+            Add rule
+          </button>
+        )}
+      </div>
+      <p className="text-xs text-gray-500 mb-3">
+        SQL conditions checked for each file, as the app user (anon key + JWT). Use <code>auth.uid()</code>,{' '}
+        <code>storage.foldername(name)</code>, the file's <code>owner</code>, <code>size</code>, <code>mime_type</code>,{' '}
+        <code>metadata</code>, and any table the user can read. The service key always has full access.
+      </p>
+
+      {isLoading ? (
+        <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
+      ) : rules.length === 0 && !adding ? (
+        <p className="text-xs text-gray-500 italic">No custom rules: only public access and the uploader's own files apply.</p>
+      ) : (
+        <ul className="space-y-2">
+          {rules.map((r) => (
+            <li key={r.name} className="rounded-lg border border-gray-200 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-sm font-medium text-gray-900 truncate">{r.name}</span>
+                  <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 text-gray-700">{OPERATIONS.find(([o]) => o === r.operation)?.[1]}</span>
+                  {r.restrictive && <span className="text-xs px-1.5 py-0.5 rounded bg-amber-50 text-amber-700">restrictive</span>}
+                  {!r.bucket && <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 text-gray-500">all buckets</span>}
+                </div>
+                <button
+                  onClick={() => confirm(`Delete rule "${r.name}"?`) && remove.mutate(r.name)}
+                  className="p-1 text-gray-400 hover:text-red-600"
+                  title="Delete rule"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+              <code className="block mt-1.5 text-xs text-gray-600 break-all">{r.condition}</code>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {adding && (
+        <div className="mt-3 rounded-lg border border-gray-200 p-3 space-y-3">
+          <div className="flex gap-2">
+            <input
+              value={rule.name}
+              onChange={(e) => setRule({ ...rule, name: e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, '') })}
+              placeholder="rule_name"
+              className="flex-1 min-w-0 px-3 py-2 text-sm border border-gray-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <select
+              value={rule.operation}
+              onChange={(e) => setRule({ ...rule, operation: e.target.value as RuleOperation })}
+              className="px-3 py-2 text-sm border border-gray-300 rounded-lg outline-none"
+            >
+              {OPERATIONS.map(([o, label]) => (
+                <option key={o} value={o}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <textarea
+            value={rule.condition}
+            onChange={(e) => setRule({ ...rule, condition: e.target.value })}
+            rows={3}
+            placeholder="SQL condition, e.g. owner = auth.uid()"
+            className="w-full px-3 py-2 text-xs font-mono border border-gray-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500"
+          />
+          <div className="flex flex-wrap gap-1.5">
+            {RULE_EXAMPLES.map((ex) => (
+              <button
+                key={ex.label}
+                onClick={() => setRule({ ...rule, operation: ex.operation, condition: ex.condition })}
+                className="text-xs px-2 py-1 rounded border border-gray-200 text-gray-600 hover:bg-gray-50"
+              >
+                {ex.label}
+              </button>
+            ))}
+          </div>
+          <label className="flex items-start gap-2">
+            <input
+              type="checkbox"
+              checked={rule.restrictive}
+              onChange={(e) => setRule({ ...rule, restrictive: e.target.checked })}
+              className="rounded mt-0.5"
+            />
+            <span className="text-xs text-gray-600">
+              <strong>Restrictive</strong>: an extra requirement every access must also meet (narrows access). Off: the rule grants access.
+            </span>
+          </label>
+          <div className="flex justify-end gap-2">
+            <button onClick={() => setAdding(false)} className="px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100 rounded-lg">
+              Cancel
+            </button>
+            <button
+              onClick={() => save.mutate()}
+              disabled={!rule.name || !rule.condition.trim() || save.isPending}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+            >
+              {save.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
+              Save rule
+            </button>
+          </div>
+        </div>
+      )}
+      {error && <p className="mt-2 text-xs text-red-600">{error}</p>}
+    </div>
+  )
+}
+
+function Modal({
+  title,
+  onClose,
+  children,
+  footer,
+  wide = false,
+}: {
+  title: string
+  onClose: () => void
+  children: React.ReactNode
+  footer: React.ReactNode
+  wide?: boolean
+}) {
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={onClose}>
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+      <div
+        className={`bg-white rounded-xl shadow-xl w-full ${wide ? 'max-w-2xl' : 'max-w-md'} max-h-[92vh] flex flex-col`}
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
           <h2 className="text-lg font-semibold">{title}</h2>
           <button onClick={onClose} className="text-gray-500 hover:text-gray-700">
             <X className="w-5 h-5" />
           </button>
         </div>
-        <div className="p-6">{children}</div>
+        <div className="p-6 overflow-y-auto">{children}</div>
         <div className="flex justify-end gap-3 px-6 py-4 border-t border-gray-200">{footer}</div>
       </div>
     </div>
@@ -664,6 +859,7 @@ export default function Storage() {
 
       {showSettings && bucket && (
         <Modal
+          wide
           title={`Settings · ${bucket.name}`}
           onClose={() => setShowSettings(false)}
           footer={
@@ -697,6 +893,7 @@ export default function Storage() {
           <p className="mt-4 text-xs text-gray-500">
             {bucket.object_count} {bucket.object_count === 1 ? 'file' : 'files'} · {formatBytes(bucket.total_size)}
           </p>
+          <BucketRules bucket={bucket.name} />
         </Modal>
       )}
 

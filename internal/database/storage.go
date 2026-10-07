@@ -19,7 +19,11 @@ type StorageBucket struct {
 	Public           bool      `json:"public"`
 	FileSizeLimit    *int64    `json:"file_size_limit"`
 	AllowedMimeTypes []string  `json:"allowed_mime_types"`
-	CreatedAt        time.Time `json:"created_at"`
+	// OwnerAccess: files belong to whoever uploads them (they can read,
+	// replace and delete their own). Off = only the custom access rules
+	// (and the public flag, for reads) apply to app users.
+	OwnerAccess bool      `json:"owner_access"`
+	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
 	// Filled by ListStorageBucketsWithStats / GetStorageBucketWithStats.
 	ObjectCount int64 `json:"object_count"`
@@ -49,11 +53,11 @@ func notFound(err error) error {
 	return err
 }
 
-const bucketCols = `b.id, b.name, b.public, b.file_size_limit, b.allowed_mime_types, b.created_at, b.updated_at`
+const bucketCols = `b.id, b.name, b.public, b.file_size_limit, b.allowed_mime_types, b.owner_access, b.created_at, b.updated_at`
 
 func scanBucket(row pgx.Row, withStats bool) (*StorageBucket, error) {
 	b := &StorageBucket{}
-	dest := []any{&b.ID, &b.Name, &b.Public, &b.FileSizeLimit, &b.AllowedMimeTypes, &b.CreatedAt, &b.UpdatedAt}
+	dest := []any{&b.ID, &b.Name, &b.Public, &b.FileSizeLimit, &b.AllowedMimeTypes, &b.OwnerAccess, &b.CreatedAt, &b.UpdatedAt}
 	if withStats {
 		dest = append(dest, &b.ObjectCount, &b.TotalSize)
 	}
@@ -68,12 +72,12 @@ func scanBucket(row pgx.Row, withStats bool) (*StorageBucket, error) {
 
 // CreateStorageBucket records a bucket. A row that already exists is
 // reported as an error by the unique constraint.
-func (db *DB) CreateStorageBucket(ctx context.Context, name string, public bool, fileSizeLimit *int64, allowedMimeTypes []string) (*StorageBucket, error) {
+func (db *DB) CreateStorageBucket(ctx context.Context, name string, public bool, fileSizeLimit *int64, allowedMimeTypes []string, ownerAccess bool) (*StorageBucket, error) {
 	row := db.Pool.QueryRow(ctx, `
-		INSERT INTO storage_buckets AS b (id, name, public, file_size_limit, allowed_mime_types)
-		VALUES ($1, $1, $2, $3, $4)
+		INSERT INTO storage_buckets AS b (id, name, public, file_size_limit, allowed_mime_types, owner_access)
+		VALUES ($1, $1, $2, $3, $4, $5)
 		RETURNING `+bucketCols,
-		name, public, fileSizeLimit, nilIfEmpty(allowedMimeTypes))
+		name, public, fileSizeLimit, nilIfEmpty(allowedMimeTypes), ownerAccess)
 	b, err := scanBucket(row, false)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create bucket: %w", err)
@@ -127,11 +131,11 @@ func (db *DB) ListStorageBuckets(ctx context.Context) ([]StorageBucket, error) {
 }
 
 // UpdateStorageBucket overwrites a bucket's settings.
-func (db *DB) UpdateStorageBucket(ctx context.Context, name string, public bool, fileSizeLimit *int64, allowedMimeTypes []string) error {
+func (db *DB) UpdateStorageBucket(ctx context.Context, name string, public bool, fileSizeLimit *int64, allowedMimeTypes []string, ownerAccess bool) error {
 	tag, err := db.Pool.Exec(ctx, `
 		UPDATE storage_buckets
-		SET public = $2, file_size_limit = $3, allowed_mime_types = $4, updated_at = NOW()
-		WHERE id = $1`, name, public, fileSizeLimit, nilIfEmpty(allowedMimeTypes))
+		SET public = $2, file_size_limit = $3, allowed_mime_types = $4, owner_access = $5, updated_at = NOW()
+		WHERE id = $1`, name, public, fileSizeLimit, nilIfEmpty(allowedMimeTypes), ownerAccess)
 	if err != nil {
 		return err
 	}

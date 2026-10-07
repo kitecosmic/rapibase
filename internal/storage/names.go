@@ -24,7 +24,7 @@ var bucketNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`)
 // reservedBucketNames collide with fixed routes under /api/v1/storage.
 var reservedBucketNames = map[string]bool{
 	"buckets": true, "public": true, "sign": true, "upload": true,
-	"owner": true, "object": true, "objects": true,
+	"owner": true, "object": true, "objects": true, "rules": true,
 }
 
 func ValidateBucketName(name string) error {

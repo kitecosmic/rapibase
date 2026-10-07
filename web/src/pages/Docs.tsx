@@ -565,7 +565,7 @@ ANON_KEY + JWT is **not** accepted on \`/mcp\`. Agents get full access (SERVICE_
 | execute_sql | Parameterised raw SQL ($1, $2, ...) |
 | create_table, drop_table | Schema changes |
 | list_rls, set_rls, disable_rls | Row-level security: inspect and configure per-table modes (owner/authenticated/public/custom) |
-| list_buckets, create_bucket, update_bucket, delete_bucket, list_objects, download_object, upload_object, delete_object, create_signed_url | Storage: buckets (public/private, limits), files and temporary links |
+| list_buckets, create_bucket, update_bucket, delete_bucket, list_objects, download_object, upload_object, delete_object, create_signed_url, list_storage_rules, set_storage_rule, delete_storage_rule | Storage: buckets (public/private, limits), files, temporary links and SQL access rules |
 
 Resources: \`rapibase://tables\` (live list), \`rapibase://tables/{name}\` (single schema).
 
@@ -1299,7 +1299,7 @@ console.table(rows);`} />
   }
 }`} />
               <p className="text-sm text-gray-500 mt-2">
-                Restart Claude Desktop and the <code>rapibase</code> server appears with all 21 tools and 2 resources.
+                Restart Claude Desktop and the <code>rapibase</code> server appears with all 24 tools and 2 resources.
               </p>
             </div>
 

@@ -38,8 +38,15 @@ func storageCallerID(c *fiber.Ctx) string {
 	return s
 }
 
+// storageActor: the caller as the storage service sees it. For app users
+// it carries the JWT claims the middleware prepared for row-level
+// security, so the storage access rules run as them.
 func storageActor(c *fiber.Ctx) storage.Actor {
-	return storage.Actor{Service: storageIsService(c), UserID: storageCallerID(c)}
+	a := storage.Actor{Service: storageIsService(c), UserID: storageCallerID(c)}
+	if ac, ok := database.AuthFromContext(c.UserContext()); ok {
+		a.Claims = ac.ClaimsJSON
+	}
+	return a
 }
 
 // adminActor: the dashboard admin has full access, like the service key.
@@ -357,7 +364,8 @@ func (h *StorageHandler) UploadSigned(c *fiber.Ctx) error {
 	if err != nil {
 		return storageFail(c, err)
 	}
-	actor := storage.Actor{Service: g.Owner == "", UserID: g.Owner}
+	// the rules run as the user who asked for the link
+	actor := storage.Actor{Service: g.Claims == "", UserID: g.Owner, Claims: g.Claims}
 	in := storage.UploadInput{Bucket: bucket, Key: key, Owner: g.Owner, Upsert: g.Upsert, Actor: actor,
 		CacheControl: cacheControlValue(c.Get("x-cache-control"))}
 
@@ -469,7 +477,9 @@ func (h *StorageHandler) CreateSignedURLs(c *fiber.Ctx) error {
 
 // CreateSignedUploadURL: POST /api/v1/storage/upload/sign/:bucket/* —
 // lets a client upload one file straight to that path without keys
-// (valid 2 hours). The file will belong to the user who asked for it.
+// (valid 2 hours). The file will belong to the user who asked for it,
+// and the access rules are checked now (to fail early) and again, as
+// that user, when the file arrives.
 func (h *StorageHandler) CreateSignedUploadURL(c *fiber.Ctx) error {
 	var req struct {
 		Upsert  bool   `json:"upsert"`
@@ -477,33 +487,15 @@ func (h *StorageHandler) CreateSignedUploadURL(c *fiber.Ctx) error {
 	}
 	_ = c.BodyParser(&req)
 	bucket, key, actor := bucketParam(c, "bucket"), keyParam(c), storageActor(c)
-	if err := storage.ValidateKey(key); err != nil {
-		return storageFail(c, err)
-	}
-	owner := req.OwnerID
-	if !actor.Service {
-		if actor.UserID == "" {
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Authentication required to upload"})
-		}
-		owner = actor.UserID
+	if !actor.Service && actor.UserID == "" {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "Authentication required to upload"})
 	}
 	ctx, cancel := opCtx(15 * time.Second)
 	defer cancel()
-	if _, err := h.svc.GetBucket(ctx, bucket); err != nil {
+	if err := h.svc.CheckUpload(ctx, actor, bucket, key, req.Upsert); err != nil {
 		return storageFail(c, err)
 	}
-	// Fail now rather than when the client uploads: an app user can't
-	// get a link that would replace someone else's file.
-	if !actor.Service {
-		if ok, err := h.svc.CanWrite(ctx, actor, bucket, key); err != nil {
-			return storageFail(c, err)
-		} else if !ok {
-			if _, err := h.svc.Stat(ctx, bucket, key); err == nil {
-				return forbidden(c)
-			}
-		}
-	}
-	u, tok, exp := h.svc.SignedUploadURL(bucket, key, owner, req.Upsert)
+	u, tok, exp := h.svc.SignedUploadURL(bucket, key, actor, req.OwnerID, req.Upsert)
 	return c.JSON(fiber.Map{"path": key, "signed_url": u, "token": tok, "expires_at": exp.UTC()})
 }
 
@@ -529,7 +521,7 @@ func (h *StorageHandler) DeleteObjectAPI(c *fiber.Ctx) error {
 	bucket, key := bucketParam(c, "bucket"), keyParam(c)
 	ctx, cancel := opCtx(30 * time.Second)
 	defer cancel()
-	ok, err := h.svc.CanWrite(ctx, storageActor(c), bucket, key)
+	ok, err := h.svc.CanDelete(ctx, storageActor(c), bucket, key)
 	if err != nil {
 		return storageFail(c, err)
 	}
@@ -560,7 +552,7 @@ func (h *StorageHandler) RemoveObjectsAPI(c *fiber.Ctx) error {
 	allowed := []string{}
 	failed := []fiber.Map{}
 	for _, p := range req.Paths {
-		ok, err := h.svc.CanWrite(ctx, actor, bucket, p)
+		ok, err := h.svc.CanDelete(ctx, actor, bucket, p)
 		if err != nil {
 			return storageFail(c, err)
 		}
@@ -632,8 +624,9 @@ func (h *StorageHandler) CopyObjectAPI(c *fiber.Ctx) error {
 }
 
 // ListObjectsAPI: GET /api/v1/storage/:bucket/list?prefix=&limit=&offset=.
-// Service key: the real folder listing. App users: every file of a
-// public bucket, otherwise only their own files.
+// Service key: the real folder listing. App users: the files their
+// access rules let them read (by default their own, or all of a public
+// bucket).
 func (h *StorageHandler) ListObjectsAPI(c *fiber.Ctx) error {
 	bucket, prefix := bucketParam(c, "bucket"), c.Query("prefix", "")
 	ctx, cancel := opCtx(30 * time.Second)
@@ -645,31 +638,20 @@ func (h *StorageHandler) ListObjectsAPI(c *fiber.Ctx) error {
 		}
 		return c.JSON(fiber.Map{"objects": entries, "prefix": prefix})
 	}
-	public, err := h.svc.IsPublic(ctx, bucket)
-	if err != nil {
-		return storageFail(c, err)
-	}
-	owner := storageCallerID(c)
-	if public {
-		owner = ""
-	}
-	objs, err := h.svc.ListRecorded(ctx, bucket, prefix, owner, c.QueryInt("limit", 1000), c.QueryInt("offset", 0))
+	objs, err := h.svc.ListRecorded(ctx, storageActor(c), bucket, prefix, c.QueryInt("limit", 1000), c.QueryInt("offset", 0))
 	if err != nil {
 		return storageFail(c, err)
 	}
 	return c.JSON(fiber.Map{"objects": objs, "prefix": prefix})
 }
 
-// ListObjectsByOwner: GET /api/v1/storage/owner/:owner_id. App users
-// always get their own files, whatever id they pass.
+// ListObjectsByOwner: GET /api/v1/storage/owner/:owner_id. App users get
+// only the files of that owner their access rules let them read.
 func (h *StorageHandler) ListObjectsByOwner(c *fiber.Ctx) error {
 	owner := c.Params("owner_id")
-	if !storageIsService(c) {
-		owner = storageCallerID(c)
-	}
 	ctx, cancel := opCtx(30 * time.Second)
 	defer cancel()
-	objs, err := h.svc.ListByOwner(ctx, owner)
+	objs, err := h.svc.ListByOwner(ctx, storageActor(c), owner)
 	if err != nil {
 		return storageFail(c, err)
 	}
@@ -684,19 +666,7 @@ func (h *StorageHandler) SearchObjectsByMetadata(c *fiber.Ctx) error {
 	}
 	ctx, cancel := opCtx(30 * time.Second)
 	defer cancel()
-	owner := ""
-	if !storageIsService(c) {
-		public, err := h.svc.IsPublic(ctx, bucket)
-		if err != nil {
-			return storageFail(c, err)
-		}
-		if !public {
-			if owner = storageCallerID(c); owner == "" {
-				return c.JSON(fiber.Map{"objects": []any{}, "filter": fiber.Map{"key": key, "value": value}})
-			}
-		}
-	}
-	objs, err := h.svc.Search(ctx, bucket, key, value, owner)
+	objs, err := h.svc.Search(ctx, storageActor(c), bucket, key, value)
 	if err != nil {
 		return storageFail(c, err)
 	}
@@ -733,7 +703,7 @@ func (h *StorageHandler) UpdateObjectMetadata(c *fiber.Ctx) error {
 	}
 	ctx, cancel := opCtx(15 * time.Second)
 	defer cancel()
-	ok, err := h.svc.CanWrite(ctx, storageActor(c), bucket, key)
+	ok, err := h.svc.CanUpdateMetadata(ctx, storageActor(c), bucket, key, body.Metadata)
 	if err != nil {
 		return storageFail(c, err)
 	}
@@ -762,7 +732,7 @@ func bucketMap(b *database.StorageBucket) fiber.Map {
 	}
 	return fiber.Map{
 		"id": b.ID, "name": b.Name, "public": b.Public, "policy": policy,
-		"file_size_limit": b.FileSizeLimit, "allowed_mime_types": b.AllowedMimeTypes,
+		"file_size_limit": b.FileSizeLimit, "allowed_mime_types": b.AllowedMimeTypes, "owner_access": b.OwnerAccess,
 		"object_count": b.ObjectCount, "total_size": b.TotalSize,
 		"created_at": b.CreatedAt, "creation_date": b.CreatedAt, "updated_at": b.UpdatedAt,
 	}
@@ -866,6 +836,66 @@ func (h *StorageHandler) DeleteBucketAPI(c *fiber.Ctx) error {
 	}
 	return h.deleteBucket(c, "name")
 }
+
+// ---- access rules --------------------------------------------------------
+
+func (h *StorageHandler) listRules(c *fiber.Ctx) error {
+	ctx, cancel := opCtx(15 * time.Second)
+	defer cancel()
+	rules, err := h.svc.ListRules(ctx, c.Query("bucket"))
+	if err != nil {
+		return storageFail(c, err)
+	}
+	return c.JSON(fiber.Map{"rules": rules})
+}
+
+func (h *StorageHandler) setRule(c *fiber.Ctx) error {
+	var r storage.AccessRule
+	if err := c.BodyParser(&r); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request body"})
+	}
+	ctx, cancel := opCtx(15 * time.Second)
+	defer cancel()
+	if err := h.svc.SetRule(ctx, r); err != nil {
+		return storageFail(c, err)
+	}
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"message": "Rule saved", "rule": r})
+}
+
+func (h *StorageHandler) deleteRule(c *fiber.Ctx) error {
+	ctx, cancel := opCtx(15 * time.Second)
+	defer cancel()
+	if err := h.svc.DeleteRule(ctx, c.Params("rule")); err != nil {
+		return storageFail(c, err)
+	}
+	return c.JSON(fiber.Map{"message": "Rule deleted"})
+}
+
+// /api/v1/storage/rules (service key) and /api/dashboard/storage/rules.
+func (h *StorageHandler) ListRulesAPI(c *fiber.Ctx) error {
+	if !storageIsService(c) {
+		return serviceOnly(c)
+	}
+	return h.listRules(c)
+}
+
+func (h *StorageHandler) SetRuleAPI(c *fiber.Ctx) error {
+	if !storageIsService(c) {
+		return serviceOnly(c)
+	}
+	return h.setRule(c)
+}
+
+func (h *StorageHandler) DeleteRuleAPI(c *fiber.Ctx) error {
+	if !storageIsService(c) {
+		return serviceOnly(c)
+	}
+	return h.deleteRule(c)
+}
+
+func (h *StorageHandler) ListRules(c *fiber.Ctx) error  { return h.listRules(c) }
+func (h *StorageHandler) SetRule(c *fiber.Ctx) error    { return h.setRule(c) }
+func (h *StorageHandler) DeleteRule(c *fiber.Ctx) error { return h.deleteRule(c) }
 
 // ---- dashboard (admin JWT): /api/dashboard/storage/… -----------------------
 

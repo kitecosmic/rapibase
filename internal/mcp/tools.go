@@ -564,8 +564,20 @@ func bucketSettingsFrom(req mcp.CallToolRequest) storage.BucketSettings {
 		v := req.GetStringSlice("allowed_mime_types", []string{})
 		set.AllowedMimeTypes = &v
 	}
+	if _, ok := args["owner_access"]; ok {
+		v := req.GetBool("owner_access", true)
+		set.OwnerAccess = &v
+	}
 	return set
 }
+
+// storageRulesHelp is shared by the rule tools: what a condition can use.
+const storageRulesHelp = "Conditions are plain SQL checked against each file row for app users (anon key + JWT): " +
+	"columns bucket_id, name (full path), owner, size, mime_type, metadata (jsonb); functions auth.uid(), auth.email(), auth.jwt(), " +
+	"storage.foldername(name) (text[] of folders), storage.filename(name), storage.extension(name); and any table the user can read " +
+	"(its own RLS applies — use a SECURITY DEFINER function to check tables they can't read). " +
+	"Permissive rules (default) add access on top of the built-in ones; restrictive rules must also pass. " +
+	"Built-in: public buckets are readable by anyone; with owner_access on (default) users upload files they own and read/replace/delete their own."
 
 func (h *Handler) registerStorageTools() {
 	bucketProps := []mcp.ToolOption{
@@ -578,6 +590,9 @@ func (h *Handler) registerStorageTools() {
 		mcp.WithArray("allowed_mime_types",
 			mcp.Description(`Allowed MIME types, exact or wildcard: ["image/*", "application/pdf"]. Empty array allows every type.`),
 			mcp.WithStringItems(),
+		),
+		mcp.WithBoolean("owner_access",
+			mcp.Description("Default true: each file belongs to the app user who uploads it, who can read, replace and delete it. Set false to rely only on the bucket's access rules (set_storage_rule)."),
 		),
 	}
 
@@ -797,6 +812,63 @@ func (h *Handler) registerStorageTools() {
 			return storageToolError(err)
 		}
 		return jsonResult(map[string]any{"message": "Object deleted successfully"})
+	})
+
+	listRules := mcp.NewTool("list_storage_rules",
+		mcp.WithDescription("List the access rules on storage files (built-in and custom), optionally only those that apply to one bucket. "+storageRulesHelp),
+		mcp.WithString("bucket", mcp.Description("Optional bucket name.")),
+		mcp.WithToolAnnotation(readOnlyAnnotation),
+		mcp.WithTitleAnnotation("List storage rules"),
+	)
+	h.mcp.AddTool(listRules, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		rules, err := h.storage.ListRules(ctx, req.GetString("bucket", ""))
+		if err != nil {
+			return storageToolError(err)
+		}
+		return jsonResult(map[string]any{"rules": rules})
+	})
+
+	setRule := mcp.NewTool("set_storage_rule",
+		mcp.WithDescription("Create or replace (same name) an access rule for storage files, e.g. who can read the files of a team folder. "+storageRulesHelp+
+			` Example — team members read files under "{team_id}/": EXISTS (SELECT 1 FROM team_members m WHERE m.user_id = auth.uid() AND m.team_id::text = (storage.foldername(name))[1])`),
+		mcp.WithString("name", mcp.Required(), mcp.Description("Rule name: lowercase letters, digits and _ (e.g. team_read).")),
+		mcp.WithString("bucket", mcp.Description("Bucket the rule applies to. Omit for every bucket.")),
+		mcp.WithString("operation", mcp.Required(), mcp.Description("read, upload, update (replace a file or its metadata), delete or all."),
+			mcp.Enum("read", "upload", "update", "delete", "all")),
+		mcp.WithString("condition", mcp.Required(), mcp.Description("SQL boolean expression evaluated per file row.")),
+		mcp.WithBoolean("restrictive", mcp.Description("true = an extra requirement every access must also meet (narrows access). Default false = grants access.")),
+		mcp.WithToolAnnotation(idempotentWriteAnnotation),
+		mcp.WithTitleAnnotation("Set storage rule"),
+	)
+	h.mcp.AddTool(setRule, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		r := storage.AccessRule{
+			Name:        req.GetString("name", ""),
+			Bucket:      req.GetString("bucket", ""),
+			Operation:   req.GetString("operation", ""),
+			Condition:   req.GetString("condition", ""),
+			Restrictive: req.GetBool("restrictive", false),
+		}
+		if err := h.storage.SetRule(ctx, r); err != nil {
+			return storageToolError(err)
+		}
+		return jsonResult(map[string]any{"message": "Rule saved", "rule": r})
+	})
+
+	deleteRule := mcp.NewTool("delete_storage_rule",
+		mcp.WithDescription("Delete a custom storage access rule. Built-in rules can't be deleted (turn owner_access off on the bucket instead)."),
+		mcp.WithString("name", mcp.Required(), mcp.Description("Rule name.")),
+		mcp.WithToolAnnotation(destructiveAnnotation),
+		mcp.WithTitleAnnotation("Delete storage rule"),
+	)
+	h.mcp.AddTool(deleteRule, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		name, err := req.RequireString("name")
+		if err != nil {
+			return storageToolError(err)
+		}
+		if err := h.storage.DeleteRule(ctx, name); err != nil {
+			return storageToolError(err)
+		}
+		return jsonResult(map[string]any{"message": "Rule deleted"})
 	})
 
 	signedURL := mcp.NewTool("create_signed_url",

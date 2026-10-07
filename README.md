@@ -35,6 +35,7 @@
 - ✅ **Public & private buckets** - Public files at a permanent URL (`/api/v1/storage/public/…`), private ones with keys, by owner, or signed URL
 - ✅ **Rules in Postgres** - Bucket settings and file owners live in your database; the S3 backend stays private and swappable (SeaweedFS by default; AWS S3, R2, B2… work too)
 - ✅ **Per-user files** - What a user uploads is theirs: only they can read (private buckets), replace or delete it
+- ✅ **Access rules in SQL** - Team folders, shared projects, chat attachments: per-bucket rules enforced by Postgres row-level security (`auth.uid()`, `storage.foldername(name)`, any table)
 - ✅ **Upload limits** - Max file size and allowed MIME types per bucket
 - ✅ **Signed URLs** - Temporary keyless download links, and signed upload links so browsers upload directly
 - ✅ **Proper file serving** - Range requests (seekable video), ETag/304, caching, sandboxed HTML/SVG
@@ -370,6 +371,7 @@ GET    /api/v1/storage/sign/:bucket/*      - Signed link (?token=, no key)
 PUT    /api/v1/storage/upload/sign/:bucket/* - Signed upload (?token=, no key)
 
 GET|POST|PATCH|DELETE /api/v1/storage/buckets[/:name] - Manage buckets (service key)
+GET|POST|DELETE /api/v1/storage/rules[/:name] - Access rules in SQL (service key)
 POST   /api/v1/storage/sign/:bucket/*      - Create a signed link ({expires_in})
 POST   /api/v1/storage/sign/:bucket        - Create signed links in bulk ({paths})
 POST   /api/v1/storage/upload/sign/:bucket/* - Create a signed upload link
@@ -399,7 +401,8 @@ RapiBase ships a built-in **Model Context Protocol** server at `POST /mcp` (stre
 | `insert_row` / `update_row` / `delete_row` | CRUD on any table. Fires the same webhooks as the REST API. |
 | `execute_sql` | Parameterised raw SQL. Internal `_rapibase_*` tables are blocked. |
 | `create_table` / `drop_table` | Schema changes when the user explicitly authorises them. |
-| `list_buckets` / `create_bucket` / `update_bucket` / `delete_bucket` | Buckets: public or private, max file size, allowed MIME types. |
+| `list_buckets` / `create_bucket` / `update_bucket` / `delete_bucket` | Buckets: public or private, max file size, allowed MIME types, owner access. |
+| `list_storage_rules` / `set_storage_rule` / `delete_storage_rule` | SQL access rules on files (team folders, sharing…), enforced by Postgres RLS. |
 | `list_objects` / `download_object` / `upload_object` / `delete_object` / `create_signed_url` | Files (base64 in and out, downloads up to 10 MB) and temporary keyless links. |
 
 | Resource | Description |
