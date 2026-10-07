@@ -86,8 +86,11 @@ func main() {
 	// on that combination at startup).
 	app.Use(cors.New(cors.Config{
 		AllowOrigins: cfg.CORSOrigins,
-		AllowHeaders: "Origin, Content-Type, Accept, Authorization, apikey",
-		AllowMethods: "GET, POST, PUT, DELETE, OPTIONS",
+		AllowHeaders: "Origin, Content-Type, Accept, Authorization, apikey, Range, If-None-Match, If-Modified-Since, x-cache-control",
+		AllowMethods: "GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS",
+		// Let browser code read what storage downloads return (size,
+		// partial ranges, file name, revalidation tag).
+		ExposeHeaders: "Content-Length, Content-Range, Content-Disposition, Accept-Ranges, ETag, Last-Modified",
 	}))
 
 	// Access log: records every /api and /mcp request with the real

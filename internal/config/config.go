@@ -58,12 +58,16 @@ type Config struct {
 	// Auth Redirects (for third-party apps)
 	AuthRedirectURL string // Where to redirect after email verification, magic link, etc.
 
-	// Storage (MinIO)
+	// Storage (any S3-compatible backend; SeaweedFS in docker-compose)
 	StorageEnabled   bool
 	StorageEndpoint  string
 	StorageAccessKey string
 	StorageSecretKey string
 	StorageUseSSL    bool
+	StorageRegion    string
+	// StoragePublicURL is deprecated and ignored: file links are served
+	// by rapibase itself under APP_URL (/api/v1/storage/public/… and
+	// signed URLs), never by the S3 backend.
 	StoragePublicURL string
 
 	// Realtime (WebSocket-based change-data + broadcast + presence + rpc)
@@ -140,13 +144,14 @@ func Load() *Config {
 		// Auth Redirects - defaults to APP_URL if not set
 		AuthRedirectURL: getEnv("AUTH_REDIRECT_URL", ""),
 
-		// Storage (MinIO)
+		// Storage
 		StorageEnabled:   getEnvBool("STORAGE_ENABLED", true),
-		StorageEndpoint:  getEnv("STORAGE_ENDPOINT", "localhost:9000"),
-		StorageAccessKey: getEnv("STORAGE_ACCESS_KEY", "minioadmin"),
-		StorageSecretKey: getEnv("STORAGE_SECRET_KEY", "minioadmin"),
+		StorageEndpoint:  getEnv("STORAGE_ENDPOINT", "localhost:8333"),
+		StorageAccessKey: getEnv("STORAGE_ACCESS_KEY", ""),
+		StorageSecretKey: getEnv("STORAGE_SECRET_KEY", ""),
 		StorageUseSSL:    getEnvBool("STORAGE_USE_SSL", false),
-		StoragePublicURL: getEnv("STORAGE_PUBLIC_URL", "http://localhost:9000"),
+		StorageRegion:    getEnv("STORAGE_REGION", ""),
+		StoragePublicURL: getEnv("STORAGE_PUBLIC_URL", ""),
 
 		// Realtime
 		RealtimeEnabled:         getEnvBool("REALTIME_ENABLED", true),
@@ -193,6 +198,7 @@ var weakSecrets = map[string]bool{
 	"rapibase-anon-key-2024-public-access":   true,
 	"admin123":                               true,
 	"minioadmin":                             true,
+	"rapibase-storage-secret":                true,
 }
 
 func isWeakSecret(v string) bool { return weakSecrets[strings.TrimSpace(v)] }
@@ -207,7 +213,7 @@ func isWeakSecret(v string) bool { return weakSecrets[strings.TrimSpace(v)] }
 //     manual step.
 //
 // It also emits non-fatal warnings for risky-but-not-secret settings
-// (default MinIO credentials, wide-open CORS).
+// (weak storage credentials, wide-open CORS).
 func (c *Config) ResolveSecrets(ctx context.Context, store SecretStore) error {
 	fields := []struct {
 		name     string
@@ -280,8 +286,11 @@ func (c *Config) ResolveSecrets(ctx context.Context, store SecretStore) error {
 		c.AdminPassword = stored
 	}
 
-	if isWeakSecret(c.StorageAccessKey) || isWeakSecret(c.StorageSecretKey) {
-		log.Printf("⚠️  MinIO is using default credentials (minioadmin). Set STORAGE_ACCESS_KEY/STORAGE_SECRET_KEY to strong values and rotate the MinIO root user.")
+	if c.IsStorageEnabled() && (isWeakSecret(c.StorageAccessKey) || isWeakSecret(c.StorageSecretKey)) {
+		log.Printf("⚠️  Storage uses weak or example credentials. Set STORAGE_ACCESS_KEY/STORAGE_SECRET_KEY to strong values (the same ones on the S3 backend).")
+	}
+	if c.StoragePublicURL != "" {
+		log.Printf("ℹ️  STORAGE_PUBLIC_URL is no longer used: file links are served by rapibase under APP_URL (%s/api/v1/storage/…). You can remove it.", strings.TrimSuffix(c.AppURL, "/"))
 	}
 	if strings.TrimSpace(c.CORSOrigins) == "*" {
 		log.Printf("⚠️  CORS_ORIGINS is '*' (any origin). Restrict it to your app's domain(s) in production.")

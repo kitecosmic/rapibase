@@ -38,7 +38,7 @@ type PushStore interface {
 // NewSender creates a new push notification sender
 func NewSender(store PushStore) *Sender {
 	return &Sender{
-		client: &http.Client{Timeout: 30 * time.Second},
+		client: newPublicOnlyClient(30 * time.Second),
 		store:  store,
 	}
 }

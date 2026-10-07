@@ -55,8 +55,12 @@ Recommended flow:
    (prefixed _rapibase_) are blocked server-side.
 5. ` + "`create_table`" + ` / ` + "`drop_table`" + ` change the schema. Only invoke when the
    user explicitly asks to add or remove a table.
-6. Storage tools (list_buckets, list_objects, upload_object, ...) talk to
-   the bundled MinIO. Files are exchanged as base64 strings.
+6. Storage: buckets are public (files readable by anyone at
+   /api/v1/storage/public/{bucket}/{path}) or private (API keys, the
+   file's owner, or a signed URL). create_bucket / update_bucket set that
+   plus per-file size and MIME limits; upload_object / download_object
+   exchange base64 (downloads up to 10 MB); create_signed_url hands out a
+   temporary keyless link for any file.
 7. Row-level security: list_rls shows which tables are protected;
    set_rls(table, mode, owner_column) configures it (modes: owner /
    authenticated / public / custom) and disable_rls removes it. Use mode
@@ -114,7 +118,7 @@ type Handler struct {
 	http http.Handler
 
 	db                *database.DB
-	storage           *storage.Client
+	storage           *storage.Service
 	webhookDispatcher WebhookDispatcher
 }
 
@@ -123,7 +127,7 @@ type Handler struct {
 // The streamable-http transport is configured stateless (no per-client
 // session) — auth is the upstream Fiber middleware's job, and the server
 // holds no state between requests.
-func NewHandler(db *database.DB, storageClient *storage.Client, dispatcher WebhookDispatcher) *Handler {
+func NewHandler(db *database.DB, storageSvc *storage.Service, dispatcher WebhookDispatcher) *Handler {
 	mcpSrv := server.NewMCPServer(
 		serverName,
 		serverVersion,
@@ -136,7 +140,7 @@ func NewHandler(db *database.DB, storageClient *storage.Client, dispatcher Webho
 	h := &Handler{
 		mcp:               mcpSrv,
 		db:                db,
-		storage:           storageClient,
+		storage:           storageSvc,
 		webhookDispatcher: dispatcher,
 	}
 

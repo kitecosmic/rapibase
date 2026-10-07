@@ -1,16 +1,19 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/rapibase/rapibase/internal/models"
+	"github.com/rapibase/rapibase/internal/storage"
 	"github.com/rapibase/rapibase/internal/webhooks"
 )
 
@@ -28,7 +31,7 @@ import (
 //   - destructiveNonIdempotentAnnotation: raw SQL — could be anything,
 //     so we pick the most conservative combination.
 //
-// OpenWorldHint is always true: every tool reaches the database or MinIO,
+// OpenWorldHint is always true: every tool reaches the database or storage,
 // which are external systems from the model's perspective.
 var (
 	readOnlyAnnotation = mcp.ToolAnnotation{
@@ -533,86 +536,176 @@ func (h *Handler) registerDDLTools() {
 }
 
 // ---------------------------------------------------------------------------
-// Storage (S3-compatible via MinIO)
+// Storage (buckets and access rules in Postgres, files in the S3 backend)
 // ---------------------------------------------------------------------------
 
+// mcpDownloadLimit caps download_object: base64 in a tool result is
+// expensive for the model; bigger files go through create_signed_url.
+const mcpDownloadLimit = 10 << 20
+
+func storageToolError(err error) (*mcp.CallToolResult, error) {
+	return mcp.NewToolResultError(err.Error()), nil
+}
+
+// bucketSettingsFrom reads the optional bucket fields present in the
+// call (absent = unchanged).
+func bucketSettingsFrom(req mcp.CallToolRequest) storage.BucketSettings {
+	args := req.GetArguments()
+	var set storage.BucketSettings
+	if _, ok := args["public"]; ok {
+		v := req.GetBool("public", false)
+		set.Public = &v
+	}
+	if _, ok := args["file_size_limit"]; ok {
+		v := int64(req.GetFloat("file_size_limit", 0))
+		set.FileSizeLimit = &v
+	}
+	if _, ok := args["allowed_mime_types"]; ok {
+		v := req.GetStringSlice("allowed_mime_types", []string{})
+		set.AllowedMimeTypes = &v
+	}
+	return set
+}
+
 func (h *Handler) registerStorageTools() {
+	bucketProps := []mcp.ToolOption{
+		mcp.WithBoolean("public",
+			mcp.Description("Public buckets serve every file to anyone at public_url (no key). Private buckets (default) need the API keys or a signed URL."),
+		),
+		mcp.WithNumber("file_size_limit",
+			mcp.Description("Max size per file in bytes, enforced on upload. 0 removes the limit."),
+		),
+		mcp.WithArray("allowed_mime_types",
+			mcp.Description(`Allowed MIME types, exact or wildcard: ["image/*", "application/pdf"]. Empty array allows every type.`),
+			mcp.WithStringItems(),
+		),
+	}
+
 	listBuckets := mcp.NewTool("list_buckets",
-		mcp.WithDescription("List every storage bucket (S3-compatible, MinIO-backed)."),
+		mcp.WithDescription("List storage buckets with their settings (public, file_size_limit, allowed_mime_types) and usage (object_count, total_size in bytes)."),
 		mcp.WithToolAnnotation(readOnlyAnnotation),
 		mcp.WithTitleAnnotation("List buckets"),
 	)
 	h.mcp.AddTool(listBuckets, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		buckets, err := h.storage.ListBuckets(ctx)
 		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
+			return storageToolError(err)
 		}
 		return jsonResult(map[string]any{"buckets": buckets})
 	})
 
+	createBucket := mcp.NewTool("create_bucket", append([]mcp.ToolOption{
+		mcp.WithDescription("Create a storage bucket. Names: 3-63 lowercase letters, numbers, dots or hyphens."),
+		mcp.WithString("name", mcp.Required(), mcp.Description("Bucket name, e.g. 'avatars'.")),
+		mcp.WithToolAnnotation(writeAnnotation),
+		mcp.WithTitleAnnotation("Create bucket"),
+	}, bucketProps...)...)
+	h.mcp.AddTool(createBucket, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		name, err := req.RequireString("name")
+		if err != nil {
+			return storageToolError(err)
+		}
+		b, err := h.storage.CreateBucket(ctx, name, bucketSettingsFrom(req))
+		if err != nil {
+			return storageToolError(err)
+		}
+		return jsonResult(b)
+	})
+
+	updateBucket := mcp.NewTool("update_bucket", append([]mcp.ToolOption{
+		mcp.WithDescription("Change a bucket's settings. Only the fields you pass change."),
+		mcp.WithString("name", mcp.Required(), mcp.Description("Bucket name.")),
+		mcp.WithToolAnnotation(idempotentWriteAnnotation),
+		mcp.WithTitleAnnotation("Update bucket"),
+	}, bucketProps...)...)
+	h.mcp.AddTool(updateBucket, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		name, err := req.RequireString("name")
+		if err != nil {
+			return storageToolError(err)
+		}
+		b, err := h.storage.UpdateBucket(ctx, name, bucketSettingsFrom(req))
+		if err != nil {
+			return storageToolError(err)
+		}
+		return jsonResult(b)
+	})
+
+	deleteBucket := mcp.NewTool("delete_bucket",
+		mcp.WithDescription("Delete a bucket. It must be empty unless force=true, which also deletes every file in it. Irreversible."),
+		mcp.WithString("name", mcp.Required(), mcp.Description("Bucket name.")),
+		mcp.WithBoolean("force", mcp.Description("Delete the bucket's files too. Default false.")),
+		mcp.WithToolAnnotation(destructiveAnnotation),
+		mcp.WithTitleAnnotation("Delete bucket"),
+	)
+	h.mcp.AddTool(deleteBucket, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		name, err := req.RequireString("name")
+		if err != nil {
+			return storageToolError(err)
+		}
+		if err := h.storage.DeleteBucket(ctx, name, req.GetBool("force", false)); err != nil {
+			return storageToolError(err)
+		}
+		return jsonResult(map[string]any{"message": "Bucket deleted successfully"})
+	})
+
 	listObjects := mcp.NewTool("list_objects",
-		mcp.WithDescription("List objects (files / folders) inside a bucket."),
-		mcp.WithString("bucket",
-			mcp.Required(),
-			mcp.Description("Bucket name."),
-		),
-		mcp.WithString("prefix",
-			mcp.Description("Optional path prefix, e.g. 'avatars/'. Default: list all."),
-		),
+		mcp.WithDescription("List one folder level of a bucket: files (size, type, owner, and public_url for public buckets) and sub-folders (is_dir)."),
+		mcp.WithString("bucket", mcp.Required(), mcp.Description("Bucket name.")),
+		mcp.WithString("prefix", mcp.Description("Folder to list, e.g. 'avatars/'. Default: the bucket root.")),
 		mcp.WithToolAnnotation(readOnlyAnnotation),
 		mcp.WithTitleAnnotation("List objects"),
 	)
 	h.mcp.AddTool(listObjects, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		bucket, err := req.RequireString("bucket")
 		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
+			return storageToolError(err)
 		}
 		prefix := req.GetString("prefix", "")
-		objs, err := h.storage.ListObjects(ctx, bucket, prefix)
+		entries, err := h.storage.ListFolder(ctx, bucket, prefix, false)
 		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
+			return storageToolError(err)
 		}
-		return jsonResult(map[string]any{"objects": objs, "prefix": prefix})
+		return jsonResult(map[string]any{"objects": entries, "prefix": prefix})
 	})
 
 	downloadObject := mcp.NewTool("download_object",
 		mcp.WithDescription(
-			"Download an object. Returns content as base64 plus its MIME "+
-				"type. For text files the agent can decode and inspect; for "+
-				"binaries (images, PDFs) the agent can re-upload to other tools.",
+			"Download a file (up to 10 MB) as base64 plus its MIME type. "+
+				"For bigger files, or to hand a file to a browser, use create_signed_url.",
 		),
-		mcp.WithString("bucket",
-			mcp.Required(),
-			mcp.Description("Bucket name."),
-		),
-		mcp.WithString("key",
-			mcp.Required(),
-			mcp.Description("Object key, e.g. 'avatars/me.png'."),
-		),
+		mcp.WithString("bucket", mcp.Required(), mcp.Description("Bucket name.")),
+		mcp.WithString("key", mcp.Required(), mcp.Description("Object path, e.g. 'avatars/me.png'.")),
 		mcp.WithToolAnnotation(readOnlyAnnotation),
 		mcp.WithTitleAnnotation("Download object"),
 	)
 	h.mcp.AddTool(downloadObject, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		bucket, err := req.RequireString("bucket")
 		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
+			return storageToolError(err)
 		}
 		key, err := req.RequireString("key")
 		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
+			return storageToolError(err)
 		}
-		obj, info, err := h.storage.GetObject(ctx, bucket, key)
+		st, err := h.storage.Stat(ctx, bucket, key)
 		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
+			return storageToolError(err)
+		}
+		if st.Size > mcpDownloadLimit {
+			return mcp.NewToolResultError(fmt.Sprintf("%s is %d bytes; download_object returns files up to 10 MB. Use create_signed_url to get a link instead.", key, st.Size)), nil
+		}
+		obj, err := h.storage.Open(ctx, bucket, key, nil)
+		if err != nil {
+			return storageToolError(err)
 		}
 		defer obj.Close()
-		body, err := io.ReadAll(obj)
+		body, err := io.ReadAll(io.LimitReader(obj, mcpDownloadLimit+1))
 		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
+			return storageToolError(err)
 		}
-		contentType := "application/octet-stream"
-		if info != nil && info.ContentType != "" {
-			contentType = info.ContentType
+		contentType := st.ContentType
+		if contentType == "" {
+			contentType = storage.DetectContentType("", key)
 		}
 		return jsonResult(map[string]any{
 			"bucket":         bucket,
@@ -625,85 +718,115 @@ func (h *Handler) registerStorageTools() {
 
 	uploadObject := mcp.NewTool("upload_object",
 		mcp.WithDescription(
-			"Upload a file to a bucket. Provide content as base64. Returns "+
-				"the stored object's `key`, `size`, `etag` and public URL "+
-				"(if the bucket is public).",
+			"Upload a file (content as base64). Respects the bucket's size and MIME limits. "+
+				"Returns the object with `url` (needs the API keys) and `public_url` when the bucket is public.",
 		),
-		mcp.WithString("bucket",
-			mcp.Required(),
-			mcp.Description("Target bucket."),
-		),
-		mcp.WithString("filename",
-			mcp.Required(),
-			mcp.Description("Filename to use (becomes part of the object key)."),
-		),
-		mcp.WithString("content_base64",
-			mcp.Required(),
-			mcp.Description("File contents, base64-encoded."),
-		),
-		mcp.WithString("path",
-			mcp.Description("Optional path prefix, e.g. 'avatars/'. Trailing slash optional."),
-		),
-		mcp.WithString("content_type",
-			mcp.Description("MIME type. Default application/octet-stream."),
-			mcp.DefaultString("application/octet-stream"),
-		),
+		mcp.WithString("bucket", mcp.Required(), mcp.Description("Target bucket.")),
+		mcp.WithString("filename", mcp.Required(), mcp.Description("File name (the last part of the object path).")),
+		mcp.WithString("content_base64", mcp.Required(), mcp.Description("File contents, base64-encoded.")),
+		mcp.WithString("path", mcp.Description("Optional folder, e.g. 'avatars/'.")),
+		mcp.WithString("content_type", mcp.Description("MIME type. Default: guessed from the file extension.")),
+		mcp.WithString("owner_id", mcp.Description("Optional app-user UUID that will own the file (that user can then read, replace and delete it with their own session).")),
+		mcp.WithBoolean("upsert", mcp.Description("Replace an existing file at that path. Default true.")),
+		mcp.WithString("cache_control", mcp.Description("Browser cache for public files, in seconds (e.g. '86400'). Default 3600.")),
 		mcp.WithToolAnnotation(idempotentWriteAnnotation),
 		mcp.WithTitleAnnotation("Upload object"),
 	)
 	h.mcp.AddTool(uploadObject, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		bucket, err := req.RequireString("bucket")
 		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
+			return storageToolError(err)
 		}
 		filename, err := req.RequireString("filename")
 		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
+			return storageToolError(err)
 		}
 		b64, err := req.RequireString("content_base64")
 		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
+			return storageToolError(err)
 		}
 		raw, err := base64.StdEncoding.DecodeString(b64)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("content_base64 is not valid base64: %v", err)), nil
 		}
-		path := req.GetString("path", "")
-		contentType := req.GetString("content_type", "application/octet-stream")
-		key := path + filename
-		result, err := h.storage.UploadObject(ctx, bucket, key, strings.NewReader(string(raw)), int64(len(raw)), contentType)
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
+		cache := req.GetString("cache_control", "")
+		if cache != "" && !strings.Contains(cache, "=") {
+			cache = "max-age=" + cache
 		}
-		return jsonResult(result)
+		obj, err := h.storage.Upload(ctx, storage.UploadInput{
+			Bucket:       bucket,
+			Key:          storage.JoinKey(req.GetString("path", ""), filename),
+			Body:         bytes.NewReader(raw),
+			Size:         int64(len(raw)),
+			ContentType:  req.GetString("content_type", ""),
+			CacheControl: cache,
+			Owner:        req.GetString("owner_id", ""),
+			Upsert:       req.GetBool("upsert", true),
+			Actor:        storage.Actor{Service: true},
+		})
+		if err != nil {
+			return storageToolError(err)
+		}
+		return jsonResult(obj)
 	})
 
 	deleteObject := mcp.NewTool("delete_object",
-		mcp.WithDescription("Delete an object from a bucket. Irreversible."),
-		mcp.WithString("bucket",
-			mcp.Required(),
-			mcp.Description("Bucket name."),
-		),
-		mcp.WithString("key",
-			mcp.Required(),
-			mcp.Description("Object key."),
-		),
+		mcp.WithDescription("Delete a file, or a whole folder when key ends with '/'. Irreversible."),
+		mcp.WithString("bucket", mcp.Required(), mcp.Description("Bucket name.")),
+		mcp.WithString("key", mcp.Required(), mcp.Description("Object path, or a folder path ending in '/'.")),
 		mcp.WithToolAnnotation(destructiveAnnotation),
 		mcp.WithTitleAnnotation("Delete object"),
 	)
 	h.mcp.AddTool(deleteObject, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		bucket, err := req.RequireString("bucket")
 		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
+			return storageToolError(err)
 		}
 		key, err := req.RequireString("key")
 		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
+			return storageToolError(err)
 		}
-		if err := h.storage.DeleteObject(ctx, bucket, key); err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
+		if strings.HasSuffix(key, "/") {
+			n, err := h.storage.DeleteFolder(ctx, bucket, key)
+			if err != nil {
+				return storageToolError(err)
+			}
+			return jsonResult(map[string]any{"message": "Folder deleted successfully", "deleted": n})
+		}
+		if err := h.storage.Delete(ctx, bucket, key); err != nil {
+			return storageToolError(err)
 		}
 		return jsonResult(map[string]any{"message": "Object deleted successfully"})
+	})
+
+	signedURL := mcp.NewTool("create_signed_url",
+		mcp.WithDescription("Create a temporary link that reads one file without any key (files in private buckets, or to share a file). Max 7 days."),
+		mcp.WithString("bucket", mcp.Required(), mcp.Description("Bucket name.")),
+		mcp.WithString("key", mcp.Required(), mcp.Description("Object path.")),
+		mcp.WithNumber("expires_in", mcp.Description("Seconds until the link expires. Default 3600, max 604800 (7 days).")),
+		mcp.WithBoolean("download", mcp.Description("Make browsers download the file instead of showing it. Default false.")),
+		mcp.WithToolAnnotation(readOnlyAnnotation),
+		mcp.WithTitleAnnotation("Create signed URL"),
+	)
+	h.mcp.AddTool(signedURL, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		bucket, err := req.RequireString("bucket")
+		if err != nil {
+			return storageToolError(err)
+		}
+		key, err := req.RequireString("key")
+		if err != nil {
+			return storageToolError(err)
+		}
+		if _, err := h.storage.Stat(ctx, bucket, key); err != nil {
+			return storageToolError(err)
+		}
+		download := ""
+		if req.GetBool("download", false) {
+			download = "true"
+		}
+		ttl := time.Duration(req.GetFloat("expires_in", 3600)) * time.Second
+		u, exp := h.storage.SignedURL(bucket, key, ttl, download)
+		return jsonResult(map[string]any{"signed_url": u, "expires_at": exp.UTC()})
 	})
 }
 

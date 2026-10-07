@@ -446,31 +446,66 @@ export const pushNotifications = {
     request<{ notifications: any[] }>(`/push/notifications?limit=${limit}`),
 }
 
-// Storage (MinIO)
-export const storage = {
-  listBuckets: () => request<{ buckets: any[] }>('/storage/buckets'),
+// Storage — buckets and access rules live in Postgres; files are served
+// by rapibase (public URL, signed URL or API keys), never by the backend.
+export interface StorageBucket {
+  id: string
+  name: string
+  public: boolean
+  file_size_limit: number | null
+  allowed_mime_types: string[]
+  object_count: number
+  total_size: number
+  created_at: string
+  updated_at: string
+}
 
-  createBucket: (name: string, isPublic: boolean = false) =>
-    request<any>('/storage/buckets', {
+export interface StorageEntry {
+  key: string
+  name: string
+  is_dir: boolean
+  size: number
+  content_type: string
+  etag?: string
+  last_modified: string
+  owner?: string | null
+  url?: string // signed, valid for one hour
+  public_url?: string // public buckets only
+}
+
+export interface BucketSettings {
+  public?: boolean
+  file_size_limit?: number // bytes; 0 removes the limit
+  allowed_mime_types?: string[] // [] allows every type
+}
+
+// Object paths may contain spaces, accents or '#': encode each segment.
+const encKey = (key: string) => key.split('/').map(encodeURIComponent).join('/')
+
+export const storage = {
+  listBuckets: () => request<{ buckets: StorageBucket[] }>('/storage/buckets'),
+
+  createBucket: (name: string, settings: BucketSettings = {}) =>
+    request<StorageBucket>('/storage/buckets', {
       method: 'POST',
-      body: JSON.stringify({ name, public: isPublic }),
+      body: JSON.stringify({ name, ...settings }),
+    }),
+
+  updateBucket: (name: string, settings: BucketSettings) =>
+    request<StorageBucket>(`/storage/buckets/${name}`, {
+      method: 'PATCH',
+      body: JSON.stringify(settings),
     }),
 
   deleteBucket: (name: string, force: boolean = false) =>
     request<any>(`/storage/buckets/${name}?force=${force}`, { method: 'DELETE' }),
 
-  getBucketInfo: (name: string) => request<any>(`/storage/buckets/${name}`),
-
-  setBucketPolicy: (name: string, isPublic: boolean) =>
-    request<any>(`/storage/buckets/${name}/policy`, {
-      method: 'PATCH',
-      body: JSON.stringify({ public: isPublic }),
-    }),
+  getBucketInfo: (name: string) => request<StorageBucket>(`/storage/buckets/${name}`),
 
   listObjects: (bucket: string, prefix: string = '') => {
     const params = new URLSearchParams()
     if (prefix) params.set('prefix', prefix)
-    return request<{ objects: any[]; prefix: string }>(`/storage/buckets/${bucket}/objects?${params}`)
+    return request<{ objects: StorageEntry[]; prefix: string }>(`/storage/buckets/${bucket}/objects?${params}`)
   },
 
   uploadObject: async (bucket: string, file: File, prefix: string = '') => {
@@ -483,16 +518,19 @@ export const storage = {
       body: formData,
     })
 
-    const data = await response.json()
-    if (!response.ok) throw new ApiError(response.status, data.error)
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) throw new ApiError(response.status, data.error || `Upload failed (${response.status})`)
     return data
   },
 
+  // A key ending in '/' deletes the whole folder.
   deleteObject: (bucket: string, key: string) =>
-    request<any>(`/storage/buckets/${bucket}/objects/${key}`, { method: 'DELETE' }),
+    request<any>(`/storage/buckets/${bucket}/objects/${encKey(key)}`, { method: 'DELETE' }),
 
-  getPresignedUrl: (bucket: string, key: string, expiry: number = 60) =>
-    request<{ url: string; expires_in: number }>(`/storage/buckets/${bucket}/presign/${key}?expiry=${expiry}`),
+  getSignedUrl: (bucket: string, key: string, expiryMinutes: number = 60, download = false) =>
+    request<{ url: string; expires_in: number; expires_at: string }>(
+      `/storage/buckets/${bucket}/presign/${encKey(key)}?expiry=${expiryMinutes}${download ? '&download=true' : ''}`
+    ),
 
   createFolder: (bucket: string, path: string) =>
     request<any>(`/storage/buckets/${bucket}/folders`, {
@@ -500,19 +538,17 @@ export const storage = {
       body: JSON.stringify({ path }),
     }),
 
-  moveObject: (bucket: string, sourceKey: string, destinationKey: string, destBucket?: string) =>
+  moveObject: (bucket: string, from: string, to: string, destBucket?: string) =>
     request<any>(`/storage/buckets/${bucket}/move`, {
       method: 'POST',
-      body: JSON.stringify({ source_key: sourceKey, destination_key: destinationKey, destination_bucket: destBucket }),
+      body: JSON.stringify({ from, to, destination_bucket: destBucket }),
     }),
 
-  copyObject: (bucket: string, sourceKey: string, destinationKey: string, destBucket?: string) =>
+  copyObject: (bucket: string, from: string, to: string, destBucket?: string) =>
     request<any>(`/storage/buckets/${bucket}/copy`, {
       method: 'POST',
-      body: JSON.stringify({ source_key: sourceKey, destination_key: destinationKey, destination_bucket: destBucket }),
+      body: JSON.stringify({ from, to, destination_bucket: destBucket }),
     }),
-
-  getObjectUrl: (bucket: string, key: string) => `${API_BASE}/storage/buckets/${bucket}/objects/${key}`,
 }
 
 // ---------------------------------------------------------------------

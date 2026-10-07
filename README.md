@@ -13,7 +13,7 @@
 - ✅ **Data Import/Export** - Import from SQL or JSON, export to both formats
 - ✅ **REST API** - Auto-generated CRUD endpoints for all your tables (works with views too)
 - ✅ **RPC Endpoint** - Call any Postgres function by name for complex queries, aggregations and reports
-- ✅ **File Storage** - S3-compatible storage with MinIO (buckets, upload, download, image preview)
+- ✅ **File Storage** - Buckets with public URLs, signed URLs, per-user ownership and upload limits (SeaweedFS backend, any S3 works)
 - ✅ **MCP for AI Agents** - Built-in [Model Context Protocol](https://modelcontextprotocol.io) endpoint at `/mcp` so Claude (and other agents) can discover tables, run CRUD, raw SQL, DDL and storage ops with one URL + one API key
 - ✅ **Static Hosting for Your Frontend** - Drop your build into `rb_public/` and rapibase serves it at `/` (SPA fallback included). Same origin as the API: `fetch('/api/v1/...')` with zero CORS config. The admin dashboard lives at `/_/`
 - ✅ **Docker Ready** - Single command deployment with docker-compose
@@ -32,11 +32,13 @@
 - ✅ **SMTP Integration** - Send emails via any SMTP provider
 
 ### Storage
-- ✅ **S3-Compatible** - Powered by MinIO, compatible with AWS S3 SDKs
-- ✅ **Bucket Management** - Create public/private buckets via UI
-- ✅ **File Operations** - Upload, download, delete, move, copy files
-- ✅ **Image Preview** - View images directly in the dashboard
-- ✅ **Presigned URLs** - Generate temporary access URLs for private files
+- ✅ **Public & private buckets** - Public files at a permanent URL (`/api/v1/storage/public/…`), private ones with keys, by owner, or signed URL
+- ✅ **Rules in Postgres** - Bucket settings and file owners live in your database; the S3 backend stays private and swappable (SeaweedFS by default; AWS S3, R2, B2… work too)
+- ✅ **Per-user files** - What a user uploads is theirs: only they can read (private buckets), replace or delete it
+- ✅ **Upload limits** - Max file size and allowed MIME types per bucket
+- ✅ **Signed URLs** - Temporary keyless download links, and signed upload links so browsers upload directly
+- ✅ **Proper file serving** - Range requests (seekable video), ETag/304, caching, sandboxed HTML/SVG
+- ✅ **Dashboard** - Buckets, folders, drag-and-drop uploads, previews (image, video, audio, PDF), links
 
 ## Quick Start
 
@@ -131,56 +133,29 @@ sudo systemctl reload caddy
 
 Done! Access your site at `https://yourdomain.com`. Caddy will automatically keep your SSL certificate valid forever.
 
-### Configure Storage Domain (MinIO)
+### Storage
 
-If you're using the Storage feature, you'll want a separate subdomain for MinIO with SSL:
+Nothing to configure: files are served by RapiBase itself under your domain (`https://yourdomain.com/api/v1/storage/…`), so the Caddy block above already covers them. The storage service (SeaweedFS) has no published ports and only RapiBase talks to it.
 
-1. Open the Caddy configuration file:
+Set strong `STORAGE_ACCESS_KEY` / `STORAGE_SECRET_KEY` values in `.env` before the first `docker compose up` (the same values are given to the storage container).
+
+#### Coming from MinIO (RapiBase before October 2026)
+
+MinIO stopped publishing images, so the bundled storage is now SeaweedFS. To move your files:
+
+1. Update RapiBase **and start it once while still on your MinIO** (keep the old `minio` service for this boot). On startup it copies the public/private setting of every bucket from MinIO into Postgres.
+2. Add the new `storage` service (see `docker-compose.yaml`), then copy the files with rclone over the compose network:
+
 ```bash
-sudo nano /etc/caddy/Caddyfile
+docker run --rm --network rapibase_default \
+  -e RCLONE_CONFIG_SRC_TYPE=s3 -e RCLONE_CONFIG_SRC_PROVIDER=Minio -e RCLONE_CONFIG_SRC_ENDPOINT=http://minio:9000 \
+  -e RCLONE_CONFIG_SRC_ACCESS_KEY_ID=$STORAGE_ACCESS_KEY -e RCLONE_CONFIG_SRC_SECRET_ACCESS_KEY=$STORAGE_SECRET_KEY \
+  -e RCLONE_CONFIG_DST_TYPE=s3 -e RCLONE_CONFIG_DST_PROVIDER=SeaweedFS -e RCLONE_CONFIG_DST_ENDPOINT=http://storage:8333 \
+  -e RCLONE_CONFIG_DST_ACCESS_KEY_ID=$STORAGE_ACCESS_KEY -e RCLONE_CONFIG_DST_SECRET_ACCESS_KEY=$STORAGE_SECRET_KEY \
+  rclone/rclone:1.75.1 copy src: dst: --metadata --create-empty-src-dirs --s3-directory-markers
 ```
 
-2. Add the MinIO configuration (replace with your domains):
-
-```caddyfile
-yourdomain.com {
-    reverse_proxy localhost:8080
-}
-
-storage.yourdomain.com {
-    reverse_proxy localhost:9000
-}
-
-minio-console.yourdomain.com {
-    reverse_proxy localhost:9001
-}
-```
-
-3. Save and reload Caddy:
-```bash
-sudo systemctl reload caddy
-```
-
-4. Update your `.env` file:
-```env
-STORAGE_PUBLIC_URL=https://storage.yourdomain.com
-STORAGE_USE_SSL=false  # Keep false, Caddy handles SSL
-
-# MinIO public URLs (required for MinIO console to generate correct links)
-MINIO_SERVER_URL=https://storage.yourdomain.com
-MINIO_BROWSER_REDIRECT_URL=https://minio-console.yourdomain.com
-```
-
-5. Restart RapiBase:
-```bash
-cd ~/rapibase
-
-docker compose down && docker compose up -d
-```
-
-Now your files will be accessible via `https://storage.yourdomain.com`.
-
-> **Note:** `STORAGE_USE_SSL=false` means the connection between RapiBase and MinIO is unencrypted (they're on the same server). Caddy handles the public SSL.
+3. Point RapiBase at `storage:8333` (the default in `docker-compose.yaml`), restart it, and remove the `minio` service once you have checked your files. `STORAGE_PUBLIC_URL` and the `MINIO_*` variables are no longer used.
 
 ### Updating to Latest Version
 
@@ -387,13 +362,23 @@ GET  /api/dashboard/export/:table       - Export table (format=json|sql)
 ```
 
 ### Storage API (For Your Apps)
-Requires `apikey` header. S3-compatible storage powered by MinIO.
+`apikey` header (service key, or anon key + the user's JWT) except for public and signed links. Full reference in the dashboard → Docs → Storage API.
 
 ```
-POST   /api/v1/storage/:bucket/upload      - Upload file
+GET    /api/v1/storage/public/:bucket/*    - Public bucket file (no key)
+GET    /api/v1/storage/sign/:bucket/*      - Signed link (?token=, no key)
+PUT    /api/v1/storage/upload/sign/:bucket/* - Signed upload (?token=, no key)
+
+GET|POST|PATCH|DELETE /api/v1/storage/buckets[/:name] - Manage buckets (service key)
+POST   /api/v1/storage/sign/:bucket/*      - Create a signed link ({expires_in})
+POST   /api/v1/storage/sign/:bucket        - Create signed links in bulk ({paths})
+POST   /api/v1/storage/upload/sign/:bucket/* - Create a signed upload link
+POST   /api/v1/storage/:bucket/upload      - Upload file (multipart)
 GET    /api/v1/storage/:bucket/list        - List files
-GET    /api/v1/storage/:bucket/*           - Download file
+GET    /api/v1/storage/:bucket/*           - Download file (Range, ETag)
 DELETE /api/v1/storage/:bucket/*           - Delete file
+POST   /api/v1/storage/:bucket/remove      - Delete several files
+POST   /api/v1/storage/:bucket/move|copy   - Move / copy a file
 GET    /api/v1/storage/:bucket/search      - Search by metadata
 GET    /api/v1/storage/:bucket/metadata/*  - Get file metadata
 PATCH  /api/v1/storage/:bucket/metadata/*  - Update file metadata
@@ -414,7 +399,8 @@ RapiBase ships a built-in **Model Context Protocol** server at `POST /mcp` (stre
 | `insert_row` / `update_row` / `delete_row` | CRUD on any table. Fires the same webhooks as the REST API. |
 | `execute_sql` | Parameterised raw SQL. Internal `_rapibase_*` tables are blocked. |
 | `create_table` / `drop_table` | Schema changes when the user explicitly authorises them. |
-| `list_buckets` / `list_objects` / `download_object` / `upload_object` / `delete_object` | S3-compatible storage. Files exchanged as base64. |
+| `list_buckets` / `create_bucket` / `update_bucket` / `delete_bucket` | Buckets: public or private, max file size, allowed MIME types. |
+| `list_objects` / `download_object` / `upload_object` / `delete_object` / `create_signed_url` | Files (base64 in and out, downloads up to 10 MB) and temporary keyless links. |
 
 | Resource | Description |
 |---|---|

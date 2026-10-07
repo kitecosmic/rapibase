@@ -245,25 +245,31 @@ func SetupRoutes(app *fiber.App, db *database.DB, cfg *config.Config) *WebhookDi
 	pushConfigAPI.Patch("/:platform/toggle", pushHandler.TogglePushConfig)
 
 	// ============================================
-	// STORAGE (MinIO) - Admin routes
+	// STORAGE — buckets and access rules in Postgres, bytes in a private
+	// S3 backend (SeaweedFS by default). Every file goes out through
+	// rapibase: public buckets, signed links, or the API keys.
 	// ============================================
-	// Hoisted out of the if-block so the MCP handler below can share the
-	// same client when storage is enabled, instead of dialing MinIO twice.
-	var storageClient *storage.Client
+	// Hoisted out of the if-block so the MCP handler below shares it.
+	var storageSvc *storage.Service
 	if cfg.IsStorageEnabled() {
-		var err error
-		storageClient, err = storage.NewClient(cfg)
+		storageClient, err := storage.NewClient(cfg)
 		if err != nil {
 			log.Printf("Warning: Failed to initialize storage client: %v", err)
-			storageClient = nil
 		} else {
-			storageHandler := handlers.NewStorageHandler(storageClient, db, cfg)
+			storageSvc = storage.NewService(storageClient, db, cfg.JWTSecret, cfg.AppURL)
+			rctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			storageSvc.Reconcile(rctx)
+			cancel()
+			go storageSvc.Backfill(context.Background())
+
+			storageHandler := handlers.NewStorageHandler(storageSvc)
 
 			// Dashboard storage routes (admin panel)
 			storageAdmin := protected.Group("/storage")
 			storageAdmin.Get("/buckets", storageHandler.ListBuckets)
 			storageAdmin.Post("/buckets", storageHandler.CreateBucket)
 			storageAdmin.Get("/buckets/:name", storageHandler.GetBucketInfo)
+			storageAdmin.Patch("/buckets/:name", storageHandler.UpdateBucket)
 			storageAdmin.Delete("/buckets/:name", storageHandler.DeleteBucket)
 			storageAdmin.Patch("/buckets/:name/policy", storageHandler.SetBucketPolicy)
 			storageAdmin.Get("/buckets/:name/objects", storageHandler.ListObjects)
@@ -275,9 +281,29 @@ func SetupRoutes(app *fiber.App, db *database.DB, cfg *config.Config) *WebhookDi
 			storageAdmin.Delete("/buckets/:name/objects/*", storageHandler.DeleteObject)
 			storageAdmin.Get("/buckets/:name/presign/*", storageHandler.GetPresignedURL)
 
-			// Public API storage routes (for third-party apps)
+			// Keyless routes. Registered BEFORE the keyed group below:
+			// Fiber runs handlers in registration order, so these answer
+			// without ever reaching RequireAPIKey.
+			api.Get("/storage/public/:bucket/*", storageHandler.ServePublic)
+			api.Get("/storage/sign/:bucket/*", storageHandler.ServeSigned)
+			api.Put("/storage/upload/sign/:bucket/*", storageHandler.UploadSigned)
+
+			// App API (anon key + user JWT, or the service key). Fixed
+			// paths first so "/:bucket/*" can't swallow them.
 			storageAPI := api.Group("/storage", apiKeyMiddleware.RequireAPIKey())
+			storageAPI.Get("/buckets", storageHandler.ListBucketsAPI)
+			storageAPI.Post("/buckets", storageHandler.CreateBucketAPI)
+			storageAPI.Get("/buckets/:name", storageHandler.GetBucketAPI)
+			storageAPI.Patch("/buckets/:name", storageHandler.UpdateBucketAPI)
+			storageAPI.Delete("/buckets/:name", storageHandler.DeleteBucketAPI)
+			storageAPI.Post("/sign/:bucket", storageHandler.CreateSignedURLs)
+			storageAPI.Post("/sign/:bucket/*", storageHandler.CreateSignedURL)
+			storageAPI.Post("/upload/sign/:bucket/*", storageHandler.CreateSignedUploadURL)
+			storageAPI.Get("/owner/:owner_id", storageHandler.ListObjectsByOwner)
 			storageAPI.Post("/:bucket/upload", storageHandler.UploadObjectAPI)
+			storageAPI.Post("/:bucket/move", storageHandler.MoveObjectAPI)
+			storageAPI.Post("/:bucket/copy", storageHandler.CopyObjectAPI)
+			storageAPI.Post("/:bucket/remove", storageHandler.RemoveObjectsAPI)
 			storageAPI.Get("/:bucket/list", storageHandler.ListObjectsAPI)
 			storageAPI.Get("/:bucket/search", storageHandler.SearchObjectsByMetadata)
 			storageAPI.Get("/:bucket/metadata/*", storageHandler.GetObjectMetadata)
@@ -285,10 +311,7 @@ func SetupRoutes(app *fiber.App, db *database.DB, cfg *config.Config) *WebhookDi
 			storageAPI.Get("/:bucket/*", storageHandler.GetObjectAPI)
 			storageAPI.Delete("/:bucket/*", storageHandler.DeleteObjectAPI)
 
-			// Get files by owner (useful for user profiles, etc.)
-			storageAPI.Get("/owner/:owner_id", storageHandler.ListObjectsByOwner)
-
-			log.Println("Storage (MinIO) initialized successfully")
+			log.Println("Storage initialized successfully")
 		}
 	}
 
@@ -298,7 +321,7 @@ func SetupRoutes(app *fiber.App, db *database.DB, cfg *config.Config) *WebhookDi
 	// connects with one URL + the SERVICE_KEY header. Tools talk to the
 	// database/storage layers directly — no internal REST hop.
 	// ============================================
-	mcpHandler := mcpserver.NewHandler(db, storageClient, webhookDispatcher)
+	mcpHandler := mcpserver.NewHandler(db, storageSvc, webhookDispatcher)
 	app.All("/mcp", apiKeyMiddleware.RequireServiceKey(), adaptor.HTTPHandler(mcpHandler))
 	log.Println("MCP endpoint mounted at /mcp")
 

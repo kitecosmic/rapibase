@@ -377,6 +377,13 @@ func (h *PushHandler) Subscribe(c *fiber.Ctx) error {
 			"error": "Platform and token are required",
 		})
 	}
+	if req.Platform == push.PlatformWeb {
+		if err := push.ValidateWebPushEndpoint(req.Endpoint); err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"error": "Invalid web push endpoint: " + err.Error(),
+			})
+		}
+	}
 
 	sub := &push.PushSubscription{
 		UserID:   userID,

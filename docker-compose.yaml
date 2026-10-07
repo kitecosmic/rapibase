@@ -60,17 +60,17 @@ services:
       # Auth Redirect
       - AUTH_REDIRECT_URL=${AUTH_REDIRECT_URL:-}
       
-      # Storage (MinIO)
+      # Storage (SeaweedFS, S3-compatible). Files are served by rapibase
+      # itself under APP_URL — the storage service is never exposed.
       - STORAGE_ENABLED=${STORAGE_ENABLED:-true}
-      - STORAGE_ENDPOINT=minio:9000
-      - STORAGE_ACCESS_KEY=${STORAGE_ACCESS_KEY:-minioadmin}
-      - STORAGE_SECRET_KEY=${STORAGE_SECRET_KEY:-minioadmin}
+      - STORAGE_ENDPOINT=storage:8333
+      - STORAGE_ACCESS_KEY=${STORAGE_ACCESS_KEY:-rapibase}
+      - STORAGE_SECRET_KEY=${STORAGE_SECRET_KEY:-rapibase-storage-secret}
       - STORAGE_USE_SSL=false
-      - STORAGE_PUBLIC_URL=${STORAGE_PUBLIC_URL:-http://localhost:9000}
     depends_on:
       db:
         condition: service_healthy
-      minio:
+      storage:
         condition: service_healthy
     restart: unless-stopped
     # Healthcheck is defined in the Dockerfile — keeping it there as
@@ -101,31 +101,37 @@ services:
       retries: 5
     restart: unless-stopped
 
-  minio:
-    image: minio/minio:latest
-    command: server /data --console-address ":9001"
-    # Bound to 127.0.0.1: the MinIO console (9001) is an admin UI that
-    # must NEVER be public, and the S3 API (9000) should be served to
-    # browsers through rapibase/Caddy (authenticated), not exposed raw.
-    # With default minioadmin credentials this binding is what stops the
-    # repo-public credentials from being usable from the internet.
-    ports:
-      - "127.0.0.1:${MINIO_API_PORT:-9000}:9000"
-      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"
+  storage:
+    # SeaweedFS in single-process mode: S3 API on 8333 for rapibase only.
+    # Pinned on purpose — bump deliberately, never "latest".
+    image: chrislusf/seaweedfs:4.47
+    # No published ports: rapibase reaches it inside this network and
+    # serves files to the world itself (public buckets, signed URLs).
+    # The admin UI, WebDAV, Iceberg/Lance catalogs and telemetry are off.
+    command: >
+      mini -dir=/data
+      -admin.ui=false -webdav=false
+      -s3.port.iceberg=0 -s3.port.lance=0
+      -master.telemetry=false
     environment:
-      - MINIO_ROOT_USER=${STORAGE_ACCESS_KEY:-minioadmin}
-      - MINIO_ROOT_PASSWORD=${STORAGE_SECRET_KEY:-minioadmin}
-      - MINIO_SERVER_URL=${MINIO_SERVER_URL:-}
-      - MINIO_BROWSER_REDIRECT_URL=${MINIO_BROWSER_REDIRECT_URL:-}
+      # S3 credentials rapibase signs with.
+      - AWS_ACCESS_KEY_ID=${STORAGE_ACCESS_KEY:-rapibase}
+      - AWS_SECRET_ACCESS_KEY=${STORAGE_SECRET_KEY:-rapibase-storage-secret}
+      # Lock SeaweedFS's internal HTTP APIs (filer, volume) with signed
+      # tokens so nothing but its own S3 gateway can read or write files.
+      - WEED_JWT_SIGNING_KEY=${STORAGE_SECRET_KEY:-rapibase-storage-secret}
+      - WEED_JWT_SIGNING_READ_KEY=${STORAGE_SECRET_KEY:-rapibase-storage-secret}
+      - WEED_JWT_FILER_SIGNING_KEY=${STORAGE_SECRET_KEY:-rapibase-storage-secret}
+      - WEED_JWT_FILER_SIGNING_READ_KEY=${STORAGE_SECRET_KEY:-rapibase-storage-secret}
     volumes:
-      - minio_data:/data
+      - storage_data:/data
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8333/healthz"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
     restart: unless-stopped
 
 volumes:
   postgres_data:
-  minio_data:
+  storage_data:
