@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -126,8 +127,21 @@ func main() {
 	// Admin dashboard (React SPA): always under the reserved /_/ path — the
 	// SPA is built with base=/_/ so its assets resolve there too. This frees
 	// the root for the user's own frontend.
-	app.Static("/_", "./web/dist")
+	// Cache: the hashed bundles under /_/assets/ never change, so browsers
+	// keep them a year; the HTML shell must be revalidated every time or a
+	// browser keeps loading the previous release's bundle after an update.
+	app.Static("/_", "./web/dist", fiber.Static{
+		ModifyResponse: func(c *fiber.Ctx) error {
+			if strings.HasPrefix(c.Path(), "/_/assets/") {
+				c.Set(fiber.HeaderCacheControl, "public, max-age=31536000, immutable")
+			} else {
+				c.Set(fiber.HeaderCacheControl, "no-cache")
+			}
+			return nil
+		},
+	})
 	app.Get("/_/*", func(c *fiber.Ctx) error {
+		c.Set(fiber.HeaderCacheControl, "no-cache")
 		return c.SendFile("./web/dist/index.html")
 	})
 

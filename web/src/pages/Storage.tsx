@@ -173,6 +173,7 @@ export default function Storage() {
   const [preview, setPreview] = useState<StorageEntry | null>(null)
   const [linkFor, setLinkFor] = useState<StorageEntry | null>(null)
   const [copied, setCopied] = useState<string | null>(null)
+  const [manualLink, setManualLink] = useState<string | null>(null)
   const [dragOver, setDragOver] = useState(false)
   const [uploading, setUploading] = useState<{ done: number; total: number } | null>(null)
   const [errors, setErrors] = useState<string[]>([])
@@ -270,8 +271,33 @@ export default function Storage() {
     [selectedBucket, currentPath]
   )
 
+  // The clipboard API can be blocked (e.g. the dashboard embedded in an
+  // iframe without clipboard permission): fall back to execCommand, and if
+  // that fails too, show the link so it can be copied by hand.
   const copy = async (text: string, id: string) => {
-    await navigator.clipboard.writeText(text)
+    let ok = false
+    try {
+      await navigator.clipboard.writeText(text)
+      ok = true
+    } catch {
+      const ta = document.createElement('textarea')
+      ta.value = text
+      ta.style.position = 'fixed'
+      ta.style.opacity = '0'
+      document.body.appendChild(ta)
+      ta.select()
+      try {
+        ok = document.execCommand('copy')
+      } catch {
+        ok = false
+      }
+      document.body.removeChild(ta)
+    }
+    if (!ok) {
+      setManualLink(text)
+      return
+    }
+    setManualLink(null)
     setCopied(id)
     setTimeout(() => setCopied((c) => (c === id ? null : c)), 1500)
   }
@@ -566,7 +592,7 @@ export default function Storage() {
                                       <Download className="w-4 h-4" />
                                     </button>
                                     <button
-                                      onClick={() => setLinkFor(obj)}
+                                      onClick={() => { setManualLink(null); setLinkFor(obj) }}
                                       className="p-1.5 text-gray-400 hover:text-blue-600 transition-colors"
                                       title="Get link"
                                     >
@@ -744,6 +770,18 @@ export default function Storage() {
               </button>
             ))}
           </div>
+          {manualLink && (
+            <div className="mt-4">
+              <p className="text-xs text-gray-500 mb-1">The browser blocked the clipboard here. Copy the link by hand:</p>
+              <input
+                readOnly
+                autoFocus
+                value={manualLink}
+                onFocus={(e) => e.currentTarget.select()}
+                className="w-full px-3 py-2 text-xs font-mono border border-gray-300 rounded-lg bg-gray-50"
+              />
+            </div>
+          )}
         </Modal>
       )}
 
