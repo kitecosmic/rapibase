@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Check, Copy, ExternalLink, Loader2, KeyRound } from 'lucide-react'
+import { Check, ChevronRight, Copy, ExternalLink, Loader2, KeyRound } from 'lucide-react'
 
 interface ProviderStatus {
   id: 'google' | 'google_native' | 'apple' | 'github' | 'facebook'
@@ -15,34 +15,89 @@ interface ProviderStatus {
   client_ids?: string[]
 }
 
-const CONSOLES: Record<ProviderStatus['id'], { url: string; label: string; steps: string }> = {
+const CONSOLES: Record<ProviderStatus['id'], { url: string; label: string; intro: string; steps: string[] }> = {
   google: {
-    url: 'https://console.cloud.google.com/apis/credentials',
-    label: 'Google Cloud → Credentials',
-    steps: 'Create an OAuth client ID of type "Web application" and add the callback URL below as an authorized redirect URI.',
+    url: 'https://console.cloud.google.com/auth/clients',
+    label: 'Google Cloud → Google Auth Platform',
+    intro: 'An OAuth client of type "Web application" with the callback URL below as an authorized redirect URI.',
+    steps: [
+      'Open console.cloud.google.com and create a project (top left) or pick an existing one.',
+      'Menu → "Google Auth Platform" (formerly "OAuth consent screen") → Get started: app name, support email, audience "External", contact email → Create.',
+      'Audience: while the app is in "Testing" only the test users you add there can sign in. Click "Publish app" to open it to everyone; with the basic scopes (email, profile) Google does not require verification.',
+      'Clients → Create client → type "Web application" → under "Authorized redirect URIs" add the callback URL below. "Authorized JavaScript origins" can stay empty.',
+      'Copy the Client ID and the Client secret right away: Google shows the full secret only once. They go in OAUTH_GOOGLE_CLIENT_ID and OAUTH_GOOGLE_CLIENT_SECRET.',
+      '"redirect_uri_mismatch" means the URI does not match character by character (https, subdomain, no trailing slash).',
+    ],
   },
   google_native: {
-    url: 'https://console.cloud.google.com/apis/credentials',
-    label: 'Google Cloud → Credentials',
-    steps:
-      'Create one OAuth client ID per app (Android: package name + SHA-1; iOS: bundle ID). Put them in OAUTH_GOOGLE_CLIENT_IDS, comma-separated. The web client ID (OAUTH_GOOGLE_CLIENT_ID) is accepted too: on Android, google_sign_in issues tokens for the serverClientId.',
+    url: 'https://console.cloud.google.com/auth/clients',
+    label: 'Google Cloud → Google Auth Platform',
+    intro: 'One OAuth client per app (Android, iOS), plus the web client: on Android, google_sign_in issues the id_token for the serverClientId, which must be the web client ID.',
+    steps: [
+      'In the same Google Cloud project, create the "Web application" client from the Google card if you have not (even if your app has no web).',
+      'Android: Clients → Create client → type "Android" → package name (applicationId) + SHA-1 fingerprint. Debug SHA-1: "cd android && ./gradlew signingReport". For the published app use the one in Play Console → Test and release → App integrity → App signing (one Android client per SHA-1).',
+      'iOS: Clients → Create client → type "iOS" → bundle ID. Add the "iOS URL scheme" it shows (the reversed client ID) to Info.plist.',
+      'Put the Android/iOS client IDs in OAUTH_GOOGLE_CLIENT_IDS, comma-separated. These clients have no secret.',
+    ],
   },
   apple: {
     url: 'https://developer.apple.com/account/resources/identifiers/list',
     label: 'Apple Developer → Identifiers',
-    steps:
-      'Enable "Sign in with Apple" on your App ID. Put the bundle ID (iOS/macOS) and, for the web, the Services ID in OAUTH_APPLE_CLIENT_IDS, comma-separated. No private key is needed: Rapibase verifies Apple\'s signed id_token.',
+    intro: 'Your bundle ID in OAUTH_APPLE_CLIENT_IDS. No private key is needed: Rapibase verifies Apple\'s signed id_token.',
+    steps: [
+      'Requires a paid Apple Developer Program membership.',
+      'Certificates, Identifiers & Profiles → Identifiers → your App ID → check "Sign in with Apple" → Save.',
+      'In Xcode: target → Signing & Capabilities → "+ Capability" → "Sign in with Apple".',
+      'Set OAUTH_APPLE_CLIENT_IDS to the bundle ID. No key, Team ID or secret needed.',
+      'Web with Apple JS only: Identifiers → "+" → Services IDs → create one, enable Sign in with Apple, add your web domain and return URL, and add that Services ID to OAUTH_APPLE_CLIENT_IDS (comma-separated).',
+      'Apple sends the name and email only on the first sign-in; users may hide their email (you get an @privaterelay.appleid.com address).',
+    ],
   },
   github: {
     url: 'https://github.com/settings/developers',
     label: 'GitHub → OAuth Apps',
-    steps: 'Create an OAuth App and use the callback URL below as "Authorization callback URL".',
+    intro: 'An OAuth App with the callback URL below as "Authorization callback URL".',
+    steps: [
+      'github.com/settings/developers (or your organization → Settings → Developer settings) → OAuth Apps → New OAuth App.',
+      'Application name, Homepage URL (your app\'s site) and "Authorization callback URL" = the callback URL below → Register application.',
+      'Copy the Client ID, click "Generate a new client secret" and copy it right away (shown once). They go in OAUTH_GITHUB_CLIENT_ID and OAUTH_GITHUB_CLIENT_SECRET.',
+    ],
   },
   facebook: {
     url: 'https://developers.facebook.com/apps',
     label: 'Meta for Developers → Apps',
-    steps: 'Add "Facebook Login" to your app and add the callback URL below to "Valid OAuth Redirect URIs".',
+    intro: 'A Meta app with Facebook Login and the callback URL below in "Valid OAuth Redirect URIs".',
+    steps: [
+      'Create app → use case "Authenticate and request data from users with Facebook Login" → name and email → Create.',
+      'Use cases → Facebook Login → Customize → Settings → add the callback URL below to "Valid OAuth Redirect URIs" → Save. Under Permissions, make sure "email" is added.',
+      'App settings → Basic: copy the App ID and the App secret (Show). They go in OAUTH_FACEBOOK_CLIENT_ID and OAUTH_FACEBOOK_CLIENT_SECRET.',
+      'In development mode only people with a role in the app can sign in. To go Live, Meta asks for a privacy policy URL and a data deletion URL.',
+    ],
   },
+}
+
+function Steps({ steps }: { steps: string[] }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="mt-3">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="inline-flex items-center gap-1 text-sm font-medium text-gray-700 hover:text-gray-900"
+        aria-expanded={open}
+      >
+        <ChevronRight className={`w-4 h-4 transition-transform ${open ? 'rotate-90' : ''}`} />
+        Step by step
+      </button>
+      {open && (
+        <ol className="mt-2 ml-5 list-decimal space-y-1.5 text-sm text-gray-600">
+          {steps.map((s) => (
+            <li key={s}>{s}</li>
+          ))}
+        </ol>
+      )}
+    </div>
+  )
 }
 
 function CopyField({ label, value }: { label: string; value: string }) {
@@ -89,7 +144,8 @@ function ProviderCard({ p }: { p: ProviderStatus }) {
         </span>
       </div>
 
-      <p className="text-sm text-gray-600 mt-3">{help.steps}</p>
+      <p className="text-sm text-gray-600 mt-3">{help.intro}</p>
+      <Steps steps={help.steps} />
 
       <div className="mt-4 space-y-3">
         {p.callback_url && <CopyField label="Callback URL (register it at the provider)" value={p.callback_url} />}
