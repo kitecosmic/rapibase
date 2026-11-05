@@ -124,6 +124,17 @@ func main() {
 		log.Println("Realtime: disabled by REALTIME_ENABLED=false")
 	}
 
+	// Unknown API routes answer a JSON 404 instead of falling through to the
+	// SPA fallbacks below (which would return 200 + dashboard/site HTML).
+	// Registered after every API route, realtime included.
+	app.All("/api/*", func(c *fiber.Ctx) error {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{
+			"error":  "route not found",
+			"method": c.Method(),
+			"path":   c.Path(),
+		})
+	})
+
 	// Admin dashboard (React SPA): always under the reserved /_/ path — the
 	// SPA is built with base=/_/ so its assets resolve there too. This frees
 	// the root for the user's own frontend.

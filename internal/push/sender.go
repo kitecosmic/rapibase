@@ -43,76 +43,77 @@ func NewSender(store PushStore) *Sender {
 	}
 }
 
+// errUnregistered marks a device the provider reported as gone; the
+// subscription has already been deleted when this is returned.
+type errUnregistered struct{ msg string }
+
+func (e errUnregistered) Error() string { return e.msg }
+
 // SendToUser sends a notification to all devices of a user
-func (s *Sender) SendToUser(ctx context.Context, userID string, msg PushMessage) error {
+func (s *Sender) SendToUser(ctx context.Context, userID string, msg PushMessage) (DeliveryReport, error) {
 	subs, err := s.store.GetSubscriptionsByUserID(ctx, userID)
 	if err != nil {
-		return err
+		return DeliveryReport{Errors: []DeliveryError{}}, err
 	}
-
-	var lastErr error
-	for _, sub := range subs {
-		if err := s.sendToSubscription(ctx, sub, msg); err != nil {
-			lastErr = err
-		}
-	}
-
-	return lastErr
+	return s.deliver(ctx, subs, msg), nil
 }
 
 // Broadcast sends a notification to all subscribed devices
-func (s *Sender) Broadcast(ctx context.Context, msg PushMessage) error {
-	platforms := []string{PlatformWeb, PlatformIOS, PlatformAndroid}
-
-	var lastErr error
-	for _, platform := range platforms {
+func (s *Sender) Broadcast(ctx context.Context, msg PushMessage) (DeliveryReport, error) {
+	var all []PushSubscription
+	for _, platform := range []string{PlatformWeb, PlatformIOS, PlatformAndroid} {
 		subs, err := s.store.GetAllSubscriptions(ctx, platform)
 		if err != nil {
-			continue
+			return DeliveryReport{Errors: []DeliveryError{}}, err
 		}
-
-		for _, sub := range subs {
-			if err := s.sendToSubscription(ctx, sub, msg); err != nil {
-				lastErr = err
-			}
-		}
+		all = append(all, subs...)
 	}
-
-	return lastErr
+	return s.deliver(ctx, all, msg), nil
 }
 
 // SendToUsers sends a notification to multiple users
-func (s *Sender) SendToUsers(ctx context.Context, userIDs []string, msg PushMessage) error {
+func (s *Sender) SendToUsers(ctx context.Context, userIDs []string, msg PushMessage) (DeliveryReport, error) {
 	subs, err := s.store.GetSubscriptionsByUserIDs(ctx, userIDs)
 	if err != nil {
-		return err
+		return DeliveryReport{Errors: []DeliveryError{}}, err
 	}
-
-	var lastErr error
-	for _, sub := range subs {
-		if err := s.sendToSubscription(ctx, sub, msg); err != nil {
-			lastErr = err
-		}
-	}
-
-	return lastErr
+	return s.deliver(ctx, subs, msg), nil
 }
 
 // SendToFilter sends a notification to users matching filter conditions
-func (s *Sender) SendToFilter(ctx context.Context, filter *UserFilter, msg PushMessage) error {
+func (s *Sender) SendToFilter(ctx context.Context, filter *UserFilter, msg PushMessage) (DeliveryReport, error) {
 	subs, err := s.store.GetSubscriptionsByFilter(ctx, filter)
 	if err != nil {
-		return err
+		return DeliveryReport{Errors: []DeliveryError{}}, err
 	}
+	return s.deliver(ctx, subs, msg), nil
+}
 
-	var lastErr error
+// deliver sends to every subscription and counts the outcome.
+func (s *Sender) deliver(ctx context.Context, subs []PushSubscription, msg PushMessage) DeliveryReport {
+	rep := DeliveryReport{Devices: len(subs), Errors: []DeliveryError{}}
 	for _, sub := range subs {
-		if err := s.sendToSubscription(ctx, sub, msg); err != nil {
-			lastErr = err
+		err := s.sendToSubscription(ctx, sub, msg)
+		if err == nil {
+			rep.Sent++
+			continue
+		}
+		rep.Failed++
+		_, removed := err.(errUnregistered)
+		if removed {
+			rep.Removed++
+		}
+		if len(rep.Errors) < MaxReportedErrors {
+			rep.Errors = append(rep.Errors, DeliveryError{
+				SubscriptionID: sub.ID,
+				UserID:         sub.UserID,
+				Platform:       sub.Platform,
+				Error:          err.Error(),
+				Removed:        removed,
+			})
 		}
 	}
-
-	return lastErr
+	return rep
 }
 
 // sendToSubscription sends to a single subscription
@@ -121,6 +122,11 @@ func (s *Sender) sendToSubscription(ctx context.Context, sub PushSubscription, m
 	case PlatformWeb:
 		return s.sendWebPush(ctx, sub, msg)
 	case PlatformIOS:
+		// iOS apps on Firebase register an FCM token, not the APNs one:
+		// deliver through FCM (which relays to APNs) instead of failing.
+		if !IsAPNsToken(sub.Token) {
+			return s.sendFCM(ctx, sub, msg)
+		}
 		return s.sendAPNS(ctx, sub, msg)
 	case PlatformAndroid:
 		return s.sendFCM(ctx, sub, msg)
@@ -190,8 +196,8 @@ func (s *Sender) sendWebPush(ctx context.Context, sub PushSubscription, msg Push
 
 	if resp.StatusCode == 410 || resp.StatusCode == 404 {
 		// Subscription expired, delete it
-		s.store.DeleteSubscription(ctx, sub.ID)
-		return fmt.Errorf("subscription expired")
+		_ = s.store.DeleteSubscription(ctx, sub.ID)
+		return errUnregistered{fmt.Sprintf("web push subscription expired (%d)", resp.StatusCode)}
 	}
 
 	if resp.StatusCode >= 400 {

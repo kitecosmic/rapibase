@@ -265,6 +265,10 @@ func (db *DB) Migrate() error {
 
 		`CREATE INDEX IF NOT EXISTS idx_push_subs_user ON _rapibase_push_subscriptions(user_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_push_subs_platform ON _rapibase_push_subscriptions(platform)`,
+		`ALTER TABLE _rapibase_push_subscriptions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()`,
+		`ALTER TABLE _rapibase_notifications ADD COLUMN IF NOT EXISTS batch_id UUID`,
+		`ALTER TABLE _rapibase_notifications ADD COLUMN IF NOT EXISTS target VARCHAR(20)`,
+		`CREATE INDEX IF NOT EXISTS idx_notifications_batch ON _rapibase_notifications(batch_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_notifications_user ON _rapibase_notifications(user_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_notifications_read ON _rapibase_notifications(user_id, read_at)`,
 

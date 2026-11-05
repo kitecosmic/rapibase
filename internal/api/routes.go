@@ -216,21 +216,24 @@ func SetupRoutes(app *fiber.App, db *database.DB, cfg *config.Config) *WebhookDi
 
 	// ============================================
 	// PUSH - Client endpoints for third-party apps
-	// Requires API key + JWT (authenticated users)
+	// ANON_KEY + user JWT (acts on that user) or SERVICE_KEY + user_id.
 	// ============================================
 	pushAPI := api.Group("/push", apiKeyMiddleware.RequireAPIKey())
 	pushAPI.Get("/vapid", pushHandler.GetVAPIDPublicKey)
 	pushAPI.Post("/subscribe", pushHandler.Subscribe)
 	pushAPI.Delete("/subscribe", pushHandler.Unsubscribe)
+	pushAPI.Post("/unsubscribe", pushHandler.Unsubscribe)
+	pushAPI.Get("/subscriptions", pushHandler.ListSubscriptions)
 	pushAPI.Get("/notifications", pushHandler.GetNotifications)
-	pushAPI.Put("/notifications/:id/read", pushHandler.MarkRead)
 	pushAPI.Put("/notifications/read-all", pushHandler.MarkAllRead)
+	pushAPI.Put("/notifications/:id/read", pushHandler.MarkRead)
 
 	// ============================================
 	// PUSH - API endpoint for automation (SERVICE_KEY only)
 	// Use this from n8n, webhooks, or other automation tools
 	// ============================================
-	pushAPI.Post("/send", pushHandler.SendNotification)
+	// An app user's JWT must never be able to notify other users.
+	pushAPI.Post("/send", apiKeyMiddleware.RequireServiceKey(), pushHandler.SendNotification)
 
 	// ============================================
 	// PUSH - Configuración por API (SERVICE_KEY): un agente deja el push

@@ -88,12 +88,25 @@ func (s *Sender) sendAPNS(ctx context.Context, sub PushSubscription, msg PushMes
 		host = "https://api.push.apple.com"
 	}
 
-	payload := map[string]interface{}{
-		"aps": map[string]interface{}{
-			"alert": map[string]string{"title": msg.Title, "body": msg.Body},
-			"sound": "default",
-		},
+	aps := map[string]interface{}{
+		"alert": map[string]string{"title": msg.Title, "body": msg.Body},
+		"sound": "default",
 	}
+	if o := msg.IOS; o != nil {
+		if o.Sound != "" {
+			aps["sound"] = o.Sound
+		}
+		if o.Badge != nil {
+			aps["badge"] = *o.Badge
+		}
+		if o.ThreadID != "" {
+			aps["thread-id"] = o.ThreadID
+		}
+		if o.Category != "" {
+			aps["category"] = o.Category
+		}
+	}
+	payload := map[string]interface{}{"aps": aps}
 	for k, v := range msg.Data {
 		if k != "aps" {
 			payload[k] = v
@@ -126,7 +139,7 @@ func (s *Sender) sendAPNS(ctx context.Context, sub PushSubscription, msg PushMes
 	// 410 = token dado de baja; 400 BadDeviceToken también es terminal
 	if resp.StatusCode == 410 || strings.Contains(string(respBody), "BadDeviceToken") {
 		_ = s.store.DeleteSubscription(ctx, sub.ID)
-		return fmt.Errorf("APNs device token unregistered")
+		return errUnregistered{"APNs device token unregistered: " + strings.TrimSpace(string(respBody))}
 	}
 	return fmt.Errorf("APNs failed: %d - %s", resp.StatusCode, string(respBody))
 }
@@ -185,24 +198,7 @@ func (s *Sender) sendFCM(ctx context.Context, sub PushSubscription, msg PushMess
 		return fmt.Errorf("FCM auth: %w", err)
 	}
 
-	// FCM v1 exige data como map[string]string
-	data := map[string]string{}
-	for k, v := range msg.Data {
-		data[k] = fmt.Sprint(v)
-	}
-	message := map[string]interface{}{
-		"message": map[string]interface{}{
-			"token": sub.Token,
-			"notification": map[string]string{
-				"title": msg.Title,
-				"body":  msg.Body,
-			},
-		},
-	}
-	if len(data) > 0 {
-		message["message"].(map[string]interface{})["data"] = data
-	}
-	body, err := json.Marshal(message)
+	body, err := json.Marshal(map[string]interface{}{"message": fcmMessage(sub.Token, msg)})
 	if err != nil {
 		return err
 	}
@@ -226,9 +222,72 @@ func (s *Sender) sendFCM(ctx context.Context, sub PushSubscription, msg PushMess
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	if resp.StatusCode == 404 || strings.Contains(string(respBody), "UNREGISTERED") {
 		_ = s.store.DeleteSubscription(ctx, sub.ID)
-		return fmt.Errorf("FCM device token unregistered")
+		return errUnregistered{"FCM device token unregistered: " + strings.TrimSpace(string(respBody))}
 	}
 	return fmt.Errorf("FCM failed: %d - %s", resp.StatusCode, string(respBody))
+}
+
+// fcmData convierte data al map[string]string que exige FCM v1: los
+// strings van tal cual y el resto (números, bool, objetos) como JSON.
+func fcmData(in map[string]interface{}) map[string]string {
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		switch t := v.(type) {
+		case string:
+			out[k] = t
+		case nil:
+			out[k] = ""
+		default:
+			b, err := json.Marshal(t)
+			if err != nil {
+				out[k] = fmt.Sprint(t)
+			} else {
+				out[k] = string(b)
+			}
+		}
+	}
+	return out
+}
+
+// fcmMessage arma message de la API HTTP v1. token acepta el registration
+// token clásico o el Firebase Installation ID: FCM usa el mismo campo.
+func fcmMessage(token string, msg PushMessage) map[string]interface{} {
+	notification := map[string]string{"title": msg.Title, "body": msg.Body}
+	m := map[string]interface{}{"token": token, "notification": notification}
+	if len(msg.Data) > 0 {
+		m["data"] = fcmData(msg.Data)
+	}
+	if o := msg.Android; o != nil {
+		if o.Image != "" {
+			notification["image"] = o.Image
+		}
+		android := map[string]interface{}{}
+		switch strings.ToLower(o.Priority) {
+		case "high":
+			android["priority"] = "HIGH"
+		case "normal":
+			android["priority"] = "NORMAL"
+		}
+		if o.TTLSeconds > 0 {
+			android["ttl"] = fmt.Sprintf("%ds", o.TTLSeconds)
+		}
+		an := map[string]string{}
+		for k, v := range map[string]string{
+			"channel_id": o.ChannelID, "icon": o.Icon, "color": o.Color,
+			"sound": o.Sound, "tag": o.Tag, "click_action": o.ClickAction,
+		} {
+			if v != "" {
+				an[k] = v
+			}
+		}
+		if len(an) > 0 {
+			android["notification"] = an
+		}
+		if len(android) > 0 {
+			m["android"] = android
+		}
+	}
+	return m
 }
 
 // fcmAccessToken intercambia un JWT RS256 del service account por un

@@ -34,6 +34,20 @@ interface Notification {
   sent_at: string | null
   read_at: string | null
   created_at: string
+  target?: 'user_id' | 'user_ids' | 'filter' | 'broadcast' | ''
+  recipients?: number
+}
+
+function audienceLabel(n: Notification): string {
+  if (n.user_id) return `User: ${n.user_id.slice(0, 8)}...`
+  const count = n.recipients ?? 0
+  const people = `${count} ${count === 1 ? 'user' : 'users'}`
+  switch (n.target) {
+    case 'broadcast': return `Broadcast · ${people}`
+    case 'filter': return `Filter · ${people}`
+    case 'user_ids': return people
+    default: return count > 0 ? people : 'Broadcast'
+  }
 }
 
 export default function Notifications() {
@@ -183,7 +197,7 @@ export default function Notifications() {
                       <p className="text-sm text-gray-600 mt-1">{notif.body}</p>
                       <div className="flex items-center gap-3 mt-2 text-xs text-gray-500">
                         <span>
-                          {notif.user_id ? `User: ${notif.user_id.slice(0, 8)}...` : 'Broadcast'}
+                          {audienceLabel(notif)}
                         </span>
                         <span>•</span>
                         <span>{new Date(notif.created_at).toLocaleString()}</span>

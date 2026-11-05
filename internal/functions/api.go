@@ -2,7 +2,9 @@ package functions
 
 import (
 	"context"
+	"crypto/sha256"
 	_ "embed"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -28,6 +30,7 @@ const maxFunctionFileSize = 512 * 1024
 //
 //	ALL  /api/fn/:name              — invocar (auth según la function)
 //	GET  /api/v1/functions          — listar (service key)
+//	GET  /api/v1/functions/:file    — código subido + X-Content-SHA256 (service key)
 //	POST /api/v1/functions          — subir .ts/.js y recargar (service key)
 //	DELETE /api/v1/functions/:file  — borrar archivo y recargar (service key)
 //	GET  /api/v1/functions/types    — rapibase.d.ts (público)
@@ -48,6 +51,7 @@ func Setup(app *fiber.App, svc *Service, cfg *config.Config, jwtManager *auth.JW
 		return c.SendString(typeDefs)
 	})
 	app.Get("/api/v1/functions", requireServiceKey, h.list)
+	app.Get("/api/v1/functions/:file", requireServiceKey, h.source)
 	app.Post("/api/v1/functions", requireServiceKey, h.upload)
 	app.Delete("/api/v1/functions/:file", requireServiceKey, h.remove)
 
@@ -239,6 +243,28 @@ func (h *httpHandler) upload(c *fiber.Ctx) error {
 	h.svc.Reload()
 	meta, errs, files := h.svc.Snapshot()
 	return c.Status(201).JSON(fiber.Map{"saved": saved, "functions": meta, "errors": errs, "files": files})
+}
+
+// source devuelve el archivo tal como quedó subido, para comparar contra el
+// repo: el cuerpo es el código exacto y X-Content-SHA256 su hash (el mismo
+// que da `sha256sum archivo.ts`).
+func (h *httpHandler) source(c *fiber.Ctx) error {
+	name := filepath.Base(c.Params("file"))
+	if !fileNameRe.MatchString(name) {
+		return c.Status(400).JSON(fiber.Map{"error": "nombre inválido: solo [a-zA-Z0-9._-] y extensión .ts o .js"})
+	}
+	data, err := os.ReadFile(filepath.Join(h.svc.Dir(), name))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return c.Status(404).JSON(fiber.Map{"error": "archivo no encontrado: " + name})
+		}
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
+	sum := sha256.Sum256(data)
+	c.Set("X-Content-SHA256", hex.EncodeToString(sum[:]))
+	c.Set("Cache-Control", "no-store")
+	c.Set("Content-Type", "text/plain; charset=utf-8")
+	return c.Send(data)
 }
 
 func (h *httpHandler) remove(c *fiber.Ctx) error {
