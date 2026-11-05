@@ -38,6 +38,7 @@ type OAuthHandler struct {
 	jwtManager *auth.JWTManager
 	cfg        *config.Config
 	client     *http.Client
+	idTokens   *auth.IDTokenVerifier
 }
 
 func NewOAuthHandler(db *database.DB, jwtManager *auth.JWTManager, cfg *config.Config) *OAuthHandler {
@@ -46,6 +47,7 @@ func NewOAuthHandler(db *database.DB, jwtManager *auth.JWTManager, cfg *config.C
 		jwtManager: jwtManager,
 		cfg:        cfg,
 		client:     &http.Client{Timeout: 15 * time.Second},
+		idTokens:   auth.NewIDTokenVerifier(),
 	}
 }
 
@@ -73,7 +75,8 @@ func (h *OAuthHandler) callbackURL(provider string) string {
 }
 
 // Providers lists the configured providers so the app's login UI can render
-// only the buttons that will work.
+// only the buttons that will work: "providers" use the browser redirect
+// flow, "native" accept an ID token at POST /auth/oauth/{provider}/token.
 func (h *OAuthHandler) Providers(c *fiber.Ctx) error {
 	out := []string{}
 	for _, p := range []string{"google", "github", "facebook"} {
@@ -81,7 +84,13 @@ func (h *OAuthHandler) Providers(c *fiber.Ctx) error {
 			out = append(out, p)
 		}
 	}
-	return c.JSON(fiber.Map{"providers": out})
+	native := []string{}
+	for _, p := range []string{"google", "apple"} {
+		if len(h.idTokenAudiences(p)) > 0 {
+			native = append(native, p)
+		}
+	}
+	return c.JSON(fiber.Map{"providers": out, "native": native})
 }
 
 // allowedRedirect valida el destino final para no regalar tokens a un

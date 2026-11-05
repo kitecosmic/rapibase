@@ -166,6 +166,20 @@ func (db *DB) Migrate() error {
 		EXCEPTION WHEN others THEN NULL;
 		END $$`,
 
+		// Identities linked to an app user by an external provider (sub is
+		// stable even when the provider hides or changes the email).
+		`CREATE TABLE IF NOT EXISTS auth_identities (
+			id BIGSERIAL PRIMARY KEY,
+			user_id UUID NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
+			provider VARCHAR(50) NOT NULL,
+			subject VARCHAR(255) NOT NULL,
+			email VARCHAR(255),
+			created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+			last_sign_in TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+			UNIQUE(provider, subject)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_auth_identities_user ON auth_identities(user_id)`,
+
 		// Auth refresh tokens for app users
 		`CREATE TABLE IF NOT EXISTS auth_refresh_tokens (
 			id BIGSERIAL PRIMARY KEY,

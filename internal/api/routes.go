@@ -98,6 +98,8 @@ func SetupRoutes(app *fiber.App, db *database.DB, cfg *config.Config) *WebhookDi
 	authPublic := api.Group("/auth", apiKeyMiddleware.RequireAPIKeyAuthOptional())
 	authPublic.Post("/signup", rateLimiter.Limit(), authUsersHandler.SignUp)
 	authPublic.Post("/signin", rateLimiter.Limit(), authUsersHandler.SignIn)
+	// Native Google / Apple sign-in: the app's SDK id_token for a session.
+	authPublic.Post("/oauth/:provider/token", rateLimiter.Limit(), oauthHandler.TokenSignIn)
 	authPublic.Post("/token", authUsersHandler.RefreshToken)
 	authPublic.Post("/signout", authUsersHandler.SignOut)
 
@@ -206,6 +208,8 @@ func SetupRoutes(app *fiber.App, db *database.DB, cfg *config.Config) *WebhookDi
 	// ============================================
 	// PUSH NOTIFICATIONS CONFIG (admin only)
 	// ============================================
+	protected.Get("/auth/providers", oauthHandler.ProvidersStatus)
+
 	protected.Get("/push/config", pushHandler.GetPushConfigs)
 	protected.Post("/push/config/web", pushHandler.SetupWebPush)
 	protected.Post("/push/config/ios", pushHandler.SetupIOSPush)

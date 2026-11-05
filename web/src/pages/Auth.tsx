@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import AuthProviders from './AuthProviders'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { 
   Users as UsersIcon, 
@@ -20,7 +21,8 @@ import {
   ChevronDown,
   ChevronUp,
   Phone,
-  Edit
+  Edit,
+  KeyRound
 } from 'lucide-react'
 
 const API_BASE = '/api/dashboard'
@@ -898,7 +900,7 @@ interface User {
   created_at: string
 }
 
-type TabType = 'users' | 'docs'
+type TabType = 'users' | 'providers' | 'docs'
 type DocSection = 'signup' | 'signin' | 'magiclink' | 'authHeader' | 'refresh' | 'signout' | 'verify' | 'forgotPassword' | 'updateUser' | 'bulkUpdate'
 
 export default function Auth() {
@@ -1020,6 +1022,19 @@ export default function Auth() {
           </span>
         </button>
         <button
+          onClick={() => setActiveTab('providers')}
+          className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+            activeTab === 'providers'
+              ? 'bg-white text-gray-900 shadow-sm'
+              : 'text-gray-600 hover:text-gray-900'
+          }`}
+        >
+          <span className="flex items-center gap-2">
+            <KeyRound className="w-4 h-4" />
+            Providers
+          </span>
+        </button>
+        <button
           onClick={() => setActiveTab('docs')}
           className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
             activeTab === 'docs' 
@@ -1033,6 +1048,8 @@ export default function Auth() {
           </span>
         </button>
       </div>
+
+      {activeTab === 'providers' && <AuthProviders token={getAuthToken()} />}
 
       {/* Users Tab */}
       {activeTab === 'users' && (

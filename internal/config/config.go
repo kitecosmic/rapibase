@@ -95,6 +95,12 @@ type Config struct {
 	OAuthGitHubClientSecret   string
 	OAuthFacebookClientID     string
 	OAuthFacebookClientSecret string
+
+	// Native sign-in with an ID token (POST /api/v1/auth/oauth/{google|apple}/token).
+	// Google accepts OAUTH_GOOGLE_CLIENT_ID plus these (Android / iOS client
+	// IDs); Apple accepts its bundle IDs and Services IDs. No secret needed.
+	OAuthGoogleClientIDs []string
+	OAuthAppleClientIDs  []string
 }
 
 func Load() *Config {
@@ -170,6 +176,8 @@ func Load() *Config {
 		OAuthGitHubClientSecret:   getEnv("OAUTH_GITHUB_CLIENT_SECRET", ""),
 		OAuthFacebookClientID:     getEnv("OAUTH_FACEBOOK_CLIENT_ID", ""),
 		OAuthFacebookClientSecret: getEnv("OAUTH_FACEBOOK_CLIENT_SECRET", ""),
+		OAuthGoogleClientIDs:      splitCSV(getEnv("OAUTH_GOOGLE_CLIENT_IDS", "")),
+		OAuthAppleClientIDs:       splitCSV(getEnv("OAUTH_APPLE_CLIENT_IDS", "")),
 	}
 }
 
@@ -373,4 +381,15 @@ func parseDuration(s string, defaultVal time.Duration) time.Duration {
 		return defaultVal
 	}
 	return duration
+}
+
+// splitCSV splits "a, b,,c" into [a b c].
+func splitCSV(s string) []string {
+	out := []string{}
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
