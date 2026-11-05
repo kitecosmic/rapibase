@@ -125,6 +125,7 @@ func (db *DB) CreateAuthUser(ctx context.Context, email, password string, fullNa
 	if err != nil {
 		return nil, err
 	}
+	db.authUserCreated(&user)
 	return &user, nil
 }
 
@@ -147,7 +148,15 @@ func (db *DB) CreateAuthUserAdmin(ctx context.Context, email, password string, f
 	if err != nil {
 		return nil, err
 	}
+	db.authUserCreated(&user)
 	return &user, nil
+}
+
+func (db *DB) authUserCreated(u *AuthUserPublic) {
+	if db.OnAuthUserCreated != nil {
+		cp := *u
+		db.OnAuthUserCreated(&cp)
+	}
 }
 
 // UpdateAuthUser updates an auth user

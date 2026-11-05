@@ -92,21 +92,25 @@ func (w Webhook) MatchesData(data map[string]interface{}) bool {
 
 // WebhookLog represents a webhook delivery attempt
 type WebhookLog struct {
-	ID             int64     `json:"id"`
-	WebhookID      int64     `json:"webhook_id"`
-	WebhookName    string    `json:"webhook_name,omitempty"`
-	Event          string    `json:"event"`
-	Payload        string    `json:"payload"`
-	ResponseStatus int       `json:"response_status"`
-	ResponseBody   string    `json:"response_body"`
-	Attempts       int       `json:"attempts"`
-	Success        bool      `json:"success"`
-	Error          string    `json:"error,omitempty"`
-	CreatedAt      time.Time `json:"created_at"`
+	ID             int64      `json:"id"`
+	WebhookID      int64      `json:"webhook_id"`
+	DeliveryID     string     `json:"delivery_id,omitempty"`
+	Status         string     `json:"status"`
+	NextAttemptAt  *time.Time `json:"next_attempt_at,omitempty"`
+	WebhookName    string     `json:"webhook_name,omitempty"`
+	Event          string     `json:"event"`
+	Payload        string     `json:"payload"`
+	ResponseStatus int        `json:"response_status"`
+	ResponseBody   string     `json:"response_body"`
+	Attempts       int        `json:"attempts"`
+	Success        bool       `json:"success"`
+	Error          string     `json:"error,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
 }
 
 // WebhookPayload is the structure sent to webhook endpoints
 type WebhookPayload struct {
+	ID        string                 `json:"id"` // same as the X-Webhook-Id header
 	Event     string                 `json:"event"`
 	Table     string                 `json:"table"`
 	Timestamp time.Time              `json:"timestamp"`
@@ -120,6 +124,13 @@ const (
 	EventUpdate = "UPDATE"
 	EventDelete = "DELETE"
 )
+
+// AuthUsersTable is the system table whose INSERTs (new sign-ups) can be
+// subscribed to. The payload never carries password hashes or tokens.
+const AuthUsersTable = "auth_users"
+
+// IsSystemTable reports tables that "*" events don't cover.
+func IsSystemTable(table string) bool { return table == AuthUsersTable }
 
 // BuildEventName creates an event name like "INSERT:users"
 func BuildEventName(eventType, tableName string) string {

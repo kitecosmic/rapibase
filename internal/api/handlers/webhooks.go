@@ -1,7 +1,10 @@
 package handlers
 
 import (
+	"errors"
 	"strconv"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/rapibase/rapibase/internal/database"
@@ -9,11 +12,12 @@ import (
 )
 
 type WebhooksHandler struct {
-	db *database.DB
+	db         *database.DB
+	dispatcher *webhooks.Dispatcher
 }
 
-func NewWebhooksHandler(db *database.DB) *WebhooksHandler {
-	return &WebhooksHandler{db: db}
+func NewWebhooksHandler(db *database.DB, dispatcher *webhooks.Dispatcher) *WebhooksHandler {
+	return &WebhooksHandler{db: db, dispatcher: dispatcher}
 }
 
 // ListWebhooks returns all webhooks
@@ -271,6 +275,29 @@ func (h *WebhooksHandler) ListWebhookLogs(c *fiber.Ctx) error {
 	})
 }
 
+// RedeliverWebhookLog sends a logged delivery again now (same payload and
+// X-Webhook-Id) and returns the outcome.
+func (h *WebhooksHandler) RedeliverWebhookLog(c *fiber.Ctx) error {
+	id, err := strconv.ParseInt(c.Params("id"), 10, 64)
+	if err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid log id"})
+	}
+	if h.dispatcher == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "webhooks are not running"})
+	}
+	l, err := h.dispatcher.Redeliver(c.UserContext(), id)
+	if errors.Is(err, database.ErrDeliveryBusy) {
+		return c.Status(fiber.StatusConflict).JSON(fiber.Map{"error": err.Error()})
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "delivery not found"})
+	}
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+	}
+	return c.JSON(fiber.Map{"log": l})
+}
+
 // GetAvailableEvents returns the list of available webhook events
 func (h *WebhooksHandler) GetAvailableEvents(c *fiber.Ctx) error {
 	// Get all tables to build event list
@@ -285,6 +312,8 @@ func (h *WebhooksHandler) GetAvailableEvents(c *fiber.Ctx) error {
 		"INSERT:*",
 		"UPDATE:*",
 		"DELETE:*",
+		// New app users (sign-up, OAuth, native, admin). Not covered by "*".
+		"INSERT:" + webhooks.AuthUsersTable,
 	}
 
 	for _, table := range tables {

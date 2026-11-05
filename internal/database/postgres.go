@@ -12,6 +12,10 @@ import (
 
 type DB struct {
 	Pool *pgxpool.Pool
+
+	// OnAuthUserCreated, when set, runs after every new app user (sign-up,
+	// OAuth, native login, admin). Used to fire the INSERT:auth_users webhook.
+	OnAuthUserCreated func(u *AuthUserPublic)
 }
 
 func New(databaseURL string) (*DB, error) {
@@ -241,6 +245,17 @@ func (db *DB) Migrate() error {
 
 		// Condiciones por webhook: solo se entrega si el row las cumple.
 		`ALTER TABLE _rapibase_webhooks ADD COLUMN IF NOT EXISTS filter JSONB NOT NULL DEFAULT '[]'`,
+
+		// Entregas persistentes: cada fila del log es una entrega con estado
+		// (sending | pending | delivered | failed) y su próximo reintento,
+		// así los reintentos sobreviven a un reinicio. delivery_id viaja en
+		// X-Webhook-Id para que el receptor descarte duplicados.
+		`ALTER TABLE _rapibase_webhook_logs ADD COLUMN IF NOT EXISTS delivery_id TEXT`,
+		`ALTER TABLE _rapibase_webhook_logs ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'delivered'`,
+		`ALTER TABLE _rapibase_webhook_logs ADD COLUMN IF NOT EXISTS next_attempt_at TIMESTAMP WITH TIME ZONE`,
+		`ALTER TABLE _rapibase_webhook_logs ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()`,
+		`UPDATE _rapibase_webhook_logs SET status = 'failed' WHERE status = 'delivered' AND success IS NOT TRUE`,
+		`CREATE INDEX IF NOT EXISTS idx_webhook_logs_due ON _rapibase_webhook_logs(next_attempt_at) WHERE status IN ('pending', 'sending')`,
 
 		// ============================================
 		// PUSH NOTIFICATIONS

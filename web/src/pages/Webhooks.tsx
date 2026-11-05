@@ -17,6 +17,26 @@ import {
 } from 'lucide-react'
 import { webhooks, tables as tablesApi } from '../lib/api'
 
+// Automatic attempts per delivery (first + retries at 1m, 5m, 30m, 2h, 6h).
+const MAX_ATTEMPTS = 6
+
+// auth_users is a system table: its schema isn't listed, and the webhook
+// payload is the public user (no password hash, no tokens).
+const AUTH_USERS = 'auth_users'
+const AUTH_USER_COLUMNS: { name: string; type: string }[] = [
+  { name: 'id', type: 'uuid' },
+  { name: 'email', type: 'text' },
+  { name: 'email_verified', type: 'boolean' },
+  { name: 'full_name', type: 'text' },
+  { name: 'phone', type: 'text' },
+  { name: 'avatar_url', type: 'text' },
+  { name: 'created_at', type: 'timestamptz' },
+]
+
+function statusOf(log: WebhookLog): WebhookLog['status'] {
+  return log.status || (log.success ? 'delivered' : 'failed')
+}
+
 interface FilterCond {
   column: string
   op: string
@@ -39,6 +59,9 @@ interface WebhookData {
 interface WebhookLog {
   id: number
   webhook_id: number
+  delivery_id?: string
+  status: 'sending' | 'pending' | 'delivered' | 'failed'
+  next_attempt_at?: string
   webhook_name: string
   event: string
   payload: string
@@ -71,6 +94,19 @@ export default function Webhooks() {
     queryKey: ['webhook-logs'],
     queryFn: () => webhooks.getLogs(),
     enabled: showLogs,
+    refetchInterval: showLogs ? 15_000 : false,
+  })
+
+  const [resendError, setResendError] = useState<{ id: number; msg: string } | null>(null)
+  const resendMutation = useMutation({
+    mutationFn: (id: number) => webhooks.redeliver(id),
+    onMutate: () => setResendError(null),
+    onSuccess: (res, id) => {
+      const l = res.log
+      if (l && !l.success) setResendError({ id, msg: l.error || `HTTP ${l.response_status}` })
+      queryClient.invalidateQueries({ queryKey: ['webhook-logs'] })
+    },
+    onError: (err, id) => setResendError({ id, msg: err instanceof Error ? err.message : 'Resend failed' }),
   })
 
   const createMutation = useMutation({
@@ -249,10 +285,12 @@ export default function Webhooks() {
                     onClick={() => setExpandedLog(expandedLog === log.id ? null : log.id)}
                   >
                     <div className="flex items-center gap-3">
-                      {log.success ? (
+                      {statusOf(log) === 'delivered' ? (
                         <CheckCircle className="w-5 h-5 text-green-600" />
-                      ) : (
+                      ) : statusOf(log) === 'failed' ? (
                         <XCircle className="w-5 h-5 text-red-600" />
+                      ) : (
+                        <Clock className="w-5 h-5 text-amber-500" />
                       )}
                       <div>
                         <span className="font-medium text-gray-900">{log.webhook_name}</span>
@@ -261,8 +299,20 @@ export default function Webhooks() {
                       </div>
                     </div>
                     <div className="flex items-center gap-4">
-                      <span className={`text-sm ${log.success ? 'text-green-600' : 'text-red-600'}`}>
-                        {log.response_status || 'Error'}
+                      <span
+                        className={`text-sm ${
+                          statusOf(log) === 'delivered'
+                            ? 'text-green-600'
+                            : statusOf(log) === 'failed'
+                              ? 'text-red-600'
+                              : 'text-amber-600'
+                        }`}
+                      >
+                        {statusOf(log) === 'sending'
+                          ? 'Sending…'
+                          : statusOf(log) === 'pending' && log.next_attempt_at
+                            ? `Retry ${log.attempts + 1}/${MAX_ATTEMPTS} at ${new Date(log.next_attempt_at).toLocaleTimeString()}`
+                            : log.response_status || 'Error'}
                       </span>
                       <span className="text-sm text-gray-500">
                         {new Date(log.created_at).toLocaleString()}
@@ -296,9 +346,32 @@ export default function Webhooks() {
                           <p className="mt-1 text-sm text-red-600">{log.error}</p>
                         </div>
                       )}
-                      <div className="text-xs text-gray-500">
-                        Attempts: {log.attempts}
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-gray-500">
+                        <span>
+                          Attempts: {log.attempts}
+                          {statusOf(log) === 'pending' && ` of ${MAX_ATTEMPTS}`}
+                        </span>
+                        {log.delivery_id && (
+                          <span>
+                            X-Webhook-Id: <code>{log.delivery_id}</code>
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => resendMutation.mutate(log.id)}
+                          disabled={statusOf(log) === 'sending' || (resendMutation.isPending && resendMutation.variables === log.id)}
+                          className="ml-auto px-3 py-1.5 text-xs font-medium bg-gray-100 hover:bg-gray-200 border border-gray-300 rounded-lg disabled:opacity-50 transition-colors"
+                        >
+                          {resendMutation.isPending && resendMutation.variables === log.id ? 'Sending…' : 'Resend now'}
+                        </button>
                       </div>
+                      {resendError?.id === log.id && (
+                        <p className="text-xs text-red-600">Resend failed: {resendError.msg}</p>
+                      )}
+                      <p className="text-xs text-gray-400">
+                        Failed deliveries retry automatically at 1 min, 5 min, 30 min, 2 h and 6 h. A resend uses the same payload
+                        and X-Webhook-Id, so your receiver can ignore one it already processed.
+                      </p>
                     </div>
                   )}
                 </div>
@@ -366,24 +439,28 @@ function WebhookModal({ webhook, events, onClose, onSave, isLoading }: WebhookMo
 
   // Columns of the tables the webhook listens to, for the condition picker.
   // "*" means every table, so then we offer the columns of all of them.
-  const watched = selectedEvents.some((e) => e.endsWith(':*'))
-    ? tables
-    : [...new Set(selectedEvents.map((e) => e.split(':')[1]).filter((t) => t && t !== '*'))].sort()
+  const named = selectedEvents.map((e) => e.split(':')[1]).filter((t) => t && t !== '*')
+  const watched = [
+    ...new Set(selectedEvents.some((e) => e.endsWith(':*')) ? [...tables.filter((t) => t !== AUTH_USERS), ...named] : named),
+  ].sort()
+  const schemaTables = watched.filter((t) => t !== AUTH_USERS)
   const schemas = useQueries({
-    queries: watched.map((t) => ({
+    queries: schemaTables.map((t) => ({
       queryKey: ['table-schema', t],
       queryFn: () => tablesApi.get(t),
       staleTime: 60_000,
     })),
   })
   const columnTables = new Map<string, { type: string; tables: string[] }>()
-  schemas.forEach((q, i) => {
-    for (const col of (q.data?.columns ?? []) as { name: string; type: string }[]) {
+  const addColumns = (table: string, cols: { name: string; type: string }[]) => {
+    for (const col of cols) {
       const cur = columnTables.get(col.name)
-      if (cur) cur.tables.push(watched[i])
-      else columnTables.set(col.name, { type: col.type, tables: [watched[i]] })
+      if (cur) cur.tables.push(table)
+      else columnTables.set(col.name, { type: col.type, tables: [table] })
     }
-  })
+  }
+  schemas.forEach((q, i) => addColumns(schemaTables[i], (q.data?.columns ?? []) as { name: string; type: string }[]))
+  if (watched.includes(AUTH_USERS)) addColumns(AUTH_USERS, AUTH_USER_COLUMNS)
   const columnOptions = [...columnTables.entries()].sort(([a], [b]) => a.localeCompare(b))
   const valueHint = (column: string) => {
     const t = (columnTables.get(column)?.type ?? '').toLowerCase()
@@ -394,8 +471,9 @@ function WebhookModal({ webhook, events, onClose, onSave, isLoading }: WebhookMo
   }
 
   const addEvents = () => {
-    if (pickTypes.length === 0) return
-    const added = pickTypes.map((t) => `${t}:${pickTable}`)
+    const types = pickTable === AUTH_USERS ? pickTypes.filter((t) => t === 'INSERT') : pickTypes
+    if (types.length === 0) return
+    const added = types.map((t) => `${t}:${pickTable}`)
     setSelectedEvents((prev) => [...new Set([...prev, ...added])])
   }
 
@@ -472,10 +550,10 @@ function WebhookModal({ webhook, events, onClose, onSave, isLoading }: WebhookMo
               >
                 <option value="*">All tables (*)</option>
                 {tables.map((t) => (
-                  <option key={t} value={t}>{t}</option>
+                  <option key={t} value={t}>{t === AUTH_USERS ? 'auth_users (new sign-ups)' : t}</option>
                 ))}
               </select>
-              {['INSERT', 'UPDATE', 'DELETE'].map((type) => (
+              {(pickTable === AUTH_USERS ? ['INSERT'] : ['INSERT', 'UPDATE', 'DELETE']).map((type) => (
                 <label key={type} className="flex items-center gap-1.5 text-xs text-gray-700 cursor-pointer">
                   <input
                     type="checkbox"

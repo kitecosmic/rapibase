@@ -34,7 +34,7 @@ func SetupRoutes(app *fiber.App, db *database.DB, cfg *config.Config) *WebhookDi
 	authUsersHandler := handlers.NewAuthUsersHandler(db, jwtManager, smtpClient, cfg)
 	tablesHandler := handlers.NewTablesHandler(db, webhookDispatcher)
 	queryHandler := handlers.NewQueryHandler(db)
-	webhooksHandler := handlers.NewWebhooksHandler(db)
+	webhooksHandler := handlers.NewWebhooksHandler(db, webhookDispatcher.Inner())
 	pushHandler := handlers.NewPushHandler(db)
 
 	// API v1 (Public API for third-party apps)
@@ -179,7 +179,12 @@ func SetupRoutes(app *fiber.App, db *database.DB, cfg *config.Config) *WebhookDi
 			c.Context(),
 			c.QueryInt("limit", 100),
 			c.QueryInt("offset", 0),
-			c.Query("ip"),
+			database.AccessLogFilter{
+				IP:     c.Query("ip"),
+				Path:   c.Query("path"),
+				Status: c.Query("status"),
+				Method: c.Query("method"),
+			},
 		)
 		if err != nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
@@ -216,6 +221,7 @@ func SetupRoutes(app *fiber.App, db *database.DB, cfg *config.Config) *WebhookDi
 	protected.Post("/webhooks", webhooksHandler.CreateWebhook)
 	protected.Get("/webhooks/events", webhooksHandler.GetAvailableEvents)
 	protected.Get("/webhooks/logs", webhooksHandler.ListWebhookLogs)
+	protected.Post("/webhooks/logs/:id/redeliver", webhooksHandler.RedeliverWebhookLog)
 	protected.Get("/webhooks/:id", webhooksHandler.GetWebhook)
 	protected.Put("/webhooks/:id", webhooksHandler.UpdateWebhook)
 	protected.Delete("/webhooks/:id", webhooksHandler.DeleteWebhook)

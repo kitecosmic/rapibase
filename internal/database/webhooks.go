@@ -3,9 +3,11 @@ package database
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/rapibase/rapibase/internal/webhooks"
 )
 
@@ -206,16 +208,96 @@ func (db *DB) GetEnabledWebhooksByEvent(ctx context.Context, event string) ([]we
 	return result, rows.Err()
 }
 
-// CreateWebhookLog creates a webhook delivery log
-func (db *DB) CreateWebhookLog(ctx context.Context, log *webhooks.WebhookLog) error {
-	_, err := db.Pool.Exec(ctx, `
-		INSERT INTO _rapibase_webhook_logs 
-		(webhook_id, event, payload, response_status, response_body, attempts, success, error, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-	`, log.WebhookID, log.Event, log.Payload, log.ResponseStatus,
-		log.ResponseBody, log.Attempts, log.Success, log.Error, log.CreatedAt)
+const webhookLogCols = `l.id, COALESCE(l.webhook_id, 0), COALESCE(w.name, '(borrado)'), COALESCE(l.delivery_id, ''),
+	l.status, l.next_attempt_at, l.event, COALESCE(l.payload, ''), COALESCE(l.response_status, 0),
+	COALESCE(l.response_body, ''), COALESCE(l.attempts, 0), COALESCE(l.success, false), COALESCE(l.error, ''), l.created_at`
 
+func scanWebhookLog(row interface{ Scan(...any) error }) (webhooks.WebhookLog, error) {
+	var l webhooks.WebhookLog
+	err := row.Scan(&l.ID, &l.WebhookID, &l.WebhookName, &l.DeliveryID, &l.Status, &l.NextAttemptAt,
+		&l.Event, &l.Payload, &l.ResponseStatus, &l.ResponseBody, &l.Attempts, &l.Success, &l.Error, &l.CreatedAt)
+	return l, err
+}
+
+// CreateDelivery stores a new delivery, already claimed (status sending)
+// by the worker that is about to send it.
+func (db *DB) CreateDelivery(ctx context.Context, l *webhooks.WebhookLog) error {
+	return db.Pool.QueryRow(ctx, `
+		INSERT INTO _rapibase_webhook_logs
+		(webhook_id, delivery_id, event, payload, status, attempts, success, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, 'sending', 0, false, $5, NOW())
+		RETURNING id
+	`, l.WebhookID, l.DeliveryID, l.Event, l.Payload, l.CreatedAt).Scan(&l.ID)
+}
+
+// FinishAttempt records the outcome of one attempt.
+func (db *DB) FinishAttempt(ctx context.Context, id int64, r webhooks.AttemptResult) error {
+	_, err := db.Pool.Exec(ctx, `
+		UPDATE _rapibase_webhook_logs
+		SET status = $2, response_status = $3, response_body = $4, error = NULLIF($5, ''),
+		    attempts = $6, success = $7, next_attempt_at = $8, updated_at = NOW()
+		WHERE id = $1
+	`, id, r.Status, r.ResponseStatus, r.ResponseBody, r.Error, r.Attempts, r.Success, r.NextAttemptAt)
 	return err
+}
+
+// ClaimDueDeliveries takes due retries (and rows left in "sending" by a
+// worker that died) with SKIP LOCKED, so two pollers never send the same one.
+func (db *DB) ClaimDueDeliveries(ctx context.Context, staleAfter time.Duration, limit int) ([]webhooks.WebhookLog, error) {
+	rows, err := db.Pool.Query(ctx, `
+		WITH due AS (
+			SELECT id FROM _rapibase_webhook_logs
+			WHERE (status = 'pending' AND next_attempt_at <= NOW())
+			   OR (status = 'sending' AND updated_at < NOW() - make_interval(secs => $1))
+			ORDER BY id
+			FOR UPDATE SKIP LOCKED
+			LIMIT $2
+		)
+		UPDATE _rapibase_webhook_logs l SET status = 'sending', updated_at = NOW()
+		FROM due LEFT JOIN _rapibase_webhooks w ON false
+		WHERE l.id = due.id
+		RETURNING `+webhookLogCols, staleAfter.Seconds(), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []webhooks.WebhookLog
+	for rows.Next() {
+		l, err := scanWebhookLog(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, l)
+	}
+	return out, rows.Err()
+}
+
+// ErrDeliveryBusy: the delivery is being sent right now.
+var ErrDeliveryBusy = fmt.Errorf("this delivery is being sent right now")
+
+// ClaimDelivery claims one delivery for a manual resend. A row in
+// "sending" with a fresh updated_at is in flight and is refused.
+func (db *DB) ClaimDelivery(ctx context.Context, id int64) (*webhooks.WebhookLog, error) {
+	row := db.Pool.QueryRow(ctx, `
+		UPDATE _rapibase_webhook_logs l SET status = 'sending', next_attempt_at = NULL, updated_at = NOW()
+		FROM (SELECT id FROM _rapibase_webhook_logs
+		      WHERE id = $1 AND NOT (status = 'sending' AND updated_at > NOW() - INTERVAL '2 minutes')
+		      FOR UPDATE SKIP LOCKED) t
+		LEFT JOIN _rapibase_webhooks w ON false
+		WHERE l.id = t.id
+		RETURNING `+webhookLogCols, id)
+	l, err := scanWebhookLog(row)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			var exists bool
+			_ = db.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM _rapibase_webhook_logs WHERE id = $1)`, id).Scan(&exists)
+			if exists {
+				return nil, ErrDeliveryBusy
+			}
+		}
+		return nil, err
+	}
+	return &l, nil
 }
 
 // ListWebhookLogs returns webhook logs with optional filters
@@ -226,10 +308,7 @@ func (db *DB) ListWebhookLogs(ctx context.Context, webhookID *int64, success *bo
 
 	// COALESCE: al borrar un webhook sus logs quedan con webhook_id NULL
 	// (ON DELETE SET NULL) y sin él, el Scan a string rompía el listado.
-	query := `
-		SELECT l.id, COALESCE(l.webhook_id, 0), COALESCE(w.name, '(borrado)'), l.event, l.payload,
-		       COALESCE(l.response_status, 0), COALESCE(l.response_body, ''), l.attempts, l.success,
-		       COALESCE(l.error, ''), l.created_at
+	query := `SELECT ` + webhookLogCols + `
 		FROM _rapibase_webhook_logs l
 		LEFT JOIN _rapibase_webhooks w ON w.id = l.webhook_id
 		WHERE 1=1
@@ -260,22 +339,11 @@ func (db *DB) ListWebhookLogs(ctx context.Context, webhookID *int64, success *bo
 
 	var result []webhooks.WebhookLog
 	for rows.Next() {
-		var log webhooks.WebhookLog
-		var webhookName *string
-
-		err := rows.Scan(
-			&log.ID, &log.WebhookID, &webhookName, &log.Event, &log.Payload,
-			&log.ResponseStatus, &log.ResponseBody, &log.Attempts,
-			&log.Success, &log.Error, &log.CreatedAt,
-		)
+		l, err := scanWebhookLog(rows)
 		if err != nil {
 			return nil, err
 		}
-
-		if webhookName != nil {
-			log.WebhookName = *webhookName
-		}
-		result = append(result, log)
+		result = append(result, l)
 	}
 
 	return result, rows.Err()
@@ -285,7 +353,7 @@ func (db *DB) ListWebhookLogs(ctx context.Context, webhookID *int64, success *bo
 func (db *DB) CleanupOldWebhookLogs(ctx context.Context, olderThan time.Duration) (int64, error) {
 	cutoff := time.Now().Add(-olderThan)
 	result, err := db.Pool.Exec(ctx, `
-		DELETE FROM _rapibase_webhook_logs WHERE created_at < $1
+		DELETE FROM _rapibase_webhook_logs WHERE created_at < $1 AND status NOT IN ('pending', 'sending')
 	`, cutoff)
 	if err != nil {
 		return 0, err

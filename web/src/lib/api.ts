@@ -245,9 +245,9 @@ export const rls = {
 
 // Access log
 export const accessLogs = {
-  list: (limit = 100, offset = 0, ip?: string) => {
+  list: (limit = 100, offset = 0, filter: { ip?: string; path?: string; status?: string; method?: string } = {}) => {
     const p = new URLSearchParams({ limit: String(limit), offset: String(offset) })
-    if (ip) p.set('ip', ip)
+    for (const [k, v] of Object.entries(filter)) if (v && v.trim()) p.set(k, v.trim())
     return request<{ logs: any[] }>(`/access-logs?${p}`)
   },
 }
@@ -353,6 +353,9 @@ export const webhooks = {
     if (success !== undefined) params.set('success', String(success))
     return request<{ logs: any[] }>(`/webhooks/logs?${params}`)
   },
+
+  redeliver: (logId: number) =>
+    request<{ log: any }>(`/webhooks/logs/${logId}/redeliver`, { method: 'POST' }),
 
   create: (data: {
     name: string

@@ -272,26 +272,56 @@ function RlsRow({ table }: { table: string }) {
 // Access log
 // ----------------------------------------------------------------------
 
+type LogFilter = { ip: string; path: string; status: string; method: string }
+const emptyFilter: LogFilter = { ip: '', path: '', status: '', method: '' }
+
 function AccessLogSection() {
-  const [ip, setIp] = useState('')
-  const [applied, setApplied] = useState('')
-  const { data, isLoading, refetch, isFetching } = useQuery({
+  const [draft, setDraft] = useState<LogFilter>(emptyFilter)
+  const [applied, setApplied] = useState<LogFilter>(emptyFilter)
+  const { data, isLoading, refetch, isFetching, error } = useQuery({
     queryKey: ['access-logs', applied],
-    queryFn: () => accessLogs.list(200, 0, applied || undefined),
+    queryFn: () => accessLogs.list(200, 0, applied),
   })
+  const apply = (f: LogFilter) => {
+    setDraft(f)
+    setApplied(f)
+  }
+  // Clicking a cell filters by that value.
+  const pick = (k: keyof LogFilter, v: string) => apply({ ...applied, [k]: v })
+  const active = Object.values(applied).some((v) => v.trim() !== '')
+  const set = (k: keyof LogFilter) => (e: { target: { value: string } }) => setDraft({ ...draft, [k]: e.target.value })
+  const onEnter = (e: React.KeyboardEvent) => e.key === 'Enter' && setApplied(draft)
 
   const logs = data?.logs || []
   return (
     <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-      <div className="p-4 border-b border-gray-200 flex items-center gap-2">
-        <input placeholder="Filter by IP (exact)" value={ip} onChange={(e) => setIp(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && setApplied(ip)} className={inputCls} />
-        <button onClick={() => setApplied(ip)} className="px-3 py-2 bg-gray-900 text-white rounded-lg text-sm">Filter</button>
-        {applied && <button onClick={() => { setIp(''); setApplied('') }} className="text-sm text-gray-500 hover:text-gray-700">Clear</button>}
+      <div className="p-4 border-b border-gray-200 flex flex-wrap items-center gap-2">
+        <input placeholder="IP (exact)" value={draft.ip} onChange={set('ip')} onKeyDown={onEnter}
+          className={`${inputCls} w-36`} />
+        <input placeholder="Endpoint contains… e.g. /auth/signin" value={draft.path} onChange={set('path')} onKeyDown={onEnter}
+          className={`${inputCls} flex-1 min-w-[12rem]`} />
+        <select value={draft.status} onChange={(e) => apply({ ...draft, status: e.target.value })} className={`${inputCls} bg-white`}>
+          <option value="">Any status</option>
+          <option value="2xx">2xx (ok)</option>
+          <option value="4xx">4xx (client errors)</option>
+          <option value="5xx">5xx (server errors)</option>
+          <option value="401">401 Unauthorized</option>
+          <option value="403">403 Forbidden</option>
+          <option value="404">404 Not found</option>
+          <option value="429">429 Rate limited</option>
+          <option value="500">500 Server error</option>
+        </select>
+        <select value={draft.method} onChange={(e) => apply({ ...draft, method: e.target.value })} className={`${inputCls} bg-white`}>
+          <option value="">Any method</option>
+          {['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].map((m) => <option key={m} value={m}>{m}</option>)}
+        </select>
+        <button onClick={() => setApplied(draft)} className="px-3 py-2 bg-gray-900 text-white rounded-lg text-sm">Filter</button>
+        {active && <button onClick={() => apply(emptyFilter)} className="text-sm text-gray-500 hover:text-gray-700">Clear</button>}
         <button onClick={() => refetch()} className="ml-auto text-sm text-blue-600 hover:text-blue-700">
           {isFetching ? 'Refreshing…' : 'Refresh'}
         </button>
       </div>
+      {error && <p className="px-4 pt-3 text-sm text-red-600">{error instanceof Error ? error.message : 'Failed to load'}</p>}
       {isLoading ? <Spinner /> : (
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -306,10 +336,18 @@ function AccessLogSection() {
               ) : logs.map((l: any) => (
                 <tr key={l.id} className="hover:bg-gray-50">
                   <Td>{l.ts ? new Date(l.ts).toLocaleString() : '—'}</Td>
-                  <Td className="font-mono">{l.ip || '—'}</Td>
-                  <Td>{l.method}</Td>
-                  <Td className="font-mono max-w-xs truncate" title={l.path}>{l.path}</Td>
-                  <Td><StatusBadge code={l.status} /></Td>
+                  <Td className="font-mono">
+                    {l.ip ? <button className="hover:underline" title="Filter by this IP" onClick={() => pick('ip', l.ip)}>{l.ip}</button> : '—'}
+                  </Td>
+                  <Td>
+                    <button className="hover:underline" title="Filter by this method" onClick={() => pick('method', l.method)}>{l.method}</button>
+                  </Td>
+                  <Td className="font-mono max-w-xs truncate" title={l.path}>
+                    <button className="hover:underline truncate max-w-full" title="Filter by this endpoint" onClick={() => pick('path', (l.path || '').split('?')[0])}>{l.path}</button>
+                  </Td>
+                  <Td>
+                    <button title="Filter by this status" onClick={() => pick('status', String(l.status))}><StatusBadge code={l.status} /></button>
+                  </Td>
                   <Td>{l.key_type || '—'}</Td>
                   <Td className="font-mono text-xs">{l.user_id ? `${l.user_id.slice(0, 8)}… (${l.user_role || '?'})` : '—'}</Td>
                   <Td>{l.latency_ms}</Td>
