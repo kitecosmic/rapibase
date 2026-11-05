@@ -1,10 +1,18 @@
 package auth
 
 import (
+	"crypto/rand"
+	"crypto/tls"
+	"encoding/hex"
 	"fmt"
+	"html"
 	"log"
+	"mime"
+	"net"
+	"net/mail"
 	"net/smtp"
 	"strings"
+	"time"
 
 	"github.com/rapibase/rapibase/internal/config"
 )
@@ -128,45 +136,127 @@ func (s *SMTPClient) sendEmail(to, subject, htmlBody string) error {
 		log.Printf("[SMTP] Not configured - skipping email to %s", to)
 		return nil // Don't fail if SMTP not configured
 	}
+	log.Printf("[SMTP] Sending email to %s via %s:%s", to, s.config.SMTPHost, s.config.SMTPPort)
+	if err := s.deliver(to, subject, htmlBody); err != nil {
+		log.Printf("[SMTP] Error sending email: %v", err)
+		return fmt.Errorf("failed to send email: %w", err)
+	}
+	log.Printf("[SMTP] Email sent successfully to %s", to)
+	return nil
+}
 
+// SendTestEmail sends a short message and returns the server's exact error,
+// so whoever configures SMTP sees why it fails (auth, port, TLS, sender).
+func (s *SMTPClient) SendTestEmail(to string) error {
+	if !s.config.IsSMTPConfigured() {
+		return fmt.Errorf("SMTP not configured: SMTP_HOST, SMTP_USER and SMTP_PASS are required")
+	}
+	body := `<!DOCTYPE html><html><body style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;color:#333">
+<p>This is a test email from your Rapibase instance.</p>
+<p>If you are reading it, SMTP works: verification, magic link and password reset emails will be delivered.</p>
+<p style="color:#888;font-size:12px">` + html.EscapeString(s.config.AppURL) + `</p></body></html>`
+	return s.deliver(to, "Rapibase SMTP test", body)
+}
+
+// buildMessage renders headers + body. Subject and sender name are RFC 2047
+// encoded (accents survive), CR/LF can't inject headers, and Date and
+// Message-ID are set (their absence raises spam scores).
+func (s *SMTPClient) buildMessage(fromEmail, to, subject, htmlBody string) string {
+	from := (&mail.Address{Name: s.config.SMTPFromName, Address: fromEmail}).String()
+	domain := "rapibase.local"
+	if i := strings.LastIndex(fromEmail, "@"); i >= 0 {
+		domain = fromEmail[i+1:]
+	}
+	idBytes := make([]byte, 16)
+	_, _ = rand.Read(idBytes)
+	oneLine := strings.NewReplacer("\r", " ", "\n", " ")
+
+	var msg strings.Builder
+	for _, h := range [][2]string{
+		{"From", from},
+		{"To", oneLine.Replace(to)},
+		{"Subject", mime.QEncoding.Encode("utf-8", oneLine.Replace(subject))},
+		{"Date", time.Now().Format(time.RFC1123Z)},
+		{"Message-ID", fmt.Sprintf("<%s@%s>", hex.EncodeToString(idBytes), domain)},
+		{"MIME-Version", "1.0"},
+		{"Content-Type", "text/html; charset=UTF-8"},
+		{"Content-Transfer-Encoding", "8bit"},
+	} {
+		msg.WriteString(h[0] + ": " + h[1] + "\r\n")
+	}
+	msg.WriteString("\r\n")
+	msg.WriteString(strings.ReplaceAll(strings.ReplaceAll(htmlBody, "\r\n", "\n"), "\n", "\r\n"))
+	return msg.String()
+}
+
+// deliver speaks SMTP with timeouts: implicit TLS on port 465, STARTTLS on
+// any other port when the server offers it (net/smtp refuses to send AUTH
+// in clear text to a remote host).
+func (s *SMTPClient) deliver(to, subject, htmlBody string) error {
+	if strings.ContainsAny(to, "\r\n") {
+		return fmt.Errorf("invalid recipient")
+	}
+	host := s.config.SMTPHost
+	port := s.config.SMTPPort
+	if port == "" {
+		port = "587"
+	}
 	fromEmail := s.config.SMTPFrom
 	if fromEmail == "" {
 		fromEmail = s.config.SMTPUser
 	}
-
-	// Format From header with name: "Name <email@example.com>"
-	fromHeader := fromEmail
-	if s.config.SMTPFromName != "" {
-		fromHeader = fmt.Sprintf("%s <%s>", s.config.SMTPFromName, fromEmail)
+	if strings.ContainsAny(fromEmail, "\r\n") {
+		return fmt.Errorf("invalid SMTP_FROM")
 	}
+	msg := s.buildMessage(fromEmail, to, subject, htmlBody)
 
-	// Build email headers
-	headers := make(map[string]string)
-	headers["From"] = fromHeader
-	headers["To"] = to
-	headers["Subject"] = subject
-	headers["MIME-Version"] = "1.0"
-	headers["Content-Type"] = "text/html; charset=UTF-8"
-
-	var message strings.Builder
-	for k, v := range headers {
-		message.WriteString(fmt.Sprintf("%s: %s\r\n", k, v))
+	addr := net.JoinHostPort(host, port)
+	dialer := &net.Dialer{Timeout: 15 * time.Second}
+	tlsCfg := &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}
+	var conn net.Conn
+	var err error
+	if port == "465" {
+		conn, err = tls.DialWithDialer(dialer, "tcp", addr, tlsCfg)
+	} else {
+		conn, err = dialer.Dial("tcp", addr)
 	}
-	message.WriteString("\r\n")
-	message.WriteString(htmlBody)
-
-	// SMTP authentication
-	auth := smtp.PlainAuth("", s.config.SMTPUser, s.config.SMTPPass, s.config.SMTPHost)
-
-	addr := fmt.Sprintf("%s:%s", s.config.SMTPHost, s.config.SMTPPort)
-	log.Printf("[SMTP] Sending email to %s via %s", to, addr)
-
-	err := smtp.SendMail(addr, auth, fromEmail, []string{to}, []byte(message.String()))
 	if err != nil {
-		log.Printf("[SMTP] Error sending email: %v", err)
-		return fmt.Errorf("failed to send email: %w", err)
+		return fmt.Errorf("connecting to %s: %w", addr, err)
 	}
-
-	log.Printf("[SMTP] Email sent successfully to %s", to)
-	return nil
+	_ = conn.SetDeadline(time.Now().Add(45 * time.Second))
+	c, err := smtp.NewClient(conn, host)
+	if err != nil {
+		conn.Close()
+		return fmt.Errorf("SMTP greeting from %s: %w", addr, err)
+	}
+	defer c.Close()
+	if port != "465" {
+		if ok, _ := c.Extension("STARTTLS"); ok {
+			if err := c.StartTLS(tlsCfg); err != nil {
+				return fmt.Errorf("STARTTLS: %w", err)
+			}
+		}
+	}
+	if ok, _ := c.Extension("AUTH"); ok {
+		if err := c.Auth(smtp.PlainAuth("", s.config.SMTPUser, s.config.SMTPPass, host)); err != nil {
+			return fmt.Errorf("authentication: %w", err)
+		}
+	}
+	if err := c.Mail(fromEmail); err != nil {
+		return fmt.Errorf("sender %s rejected: %w", fromEmail, err)
+	}
+	if err := c.Rcpt(to); err != nil {
+		return fmt.Errorf("recipient %s rejected: %w", to, err)
+	}
+	w, err := c.Data()
+	if err != nil {
+		return err
+	}
+	if _, err := w.Write([]byte(msg)); err != nil {
+		return err
+	}
+	if err := w.Close(); err != nil {
+		return fmt.Errorf("message rejected: %w", err)
+	}
+	return c.Quit()
 }

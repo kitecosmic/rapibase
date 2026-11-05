@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -98,6 +99,21 @@ func SetupRoutes(app *fiber.App, db *database.DB, cfg *config.Config) *WebhookDi
 	authPublic := api.Group("/auth", apiKeyMiddleware.RequireAPIKeyAuthOptional())
 	authPublic.Post("/signup", rateLimiter.Limit(), authUsersHandler.SignUp)
 	authPublic.Post("/signin", rateLimiter.Limit(), authUsersHandler.SignIn)
+	// SMTP test (service key): sends a test email and returns the server's
+	// exact error, so configuring SMTP is debuggable from the console.
+	api.Post("/smtp/test", apiKeyMiddleware.RequireServiceKey(), func(c *fiber.Ctx) error {
+		var req struct {
+			To string `json:"to"`
+		}
+		if err := c.BodyParser(&req); err != nil || !strings.Contains(req.To, "@") {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": `body: {"to": "you@example.com"}`, "field": "to"})
+		}
+		if err := smtpClient.SendTestEmail(strings.TrimSpace(req.To)); err != nil {
+			return c.Status(fiber.StatusBadGateway).JSON(fiber.Map{"ok": false, "error": err.Error()})
+		}
+		return c.JSON(fiber.Map{"ok": true, "to": req.To})
+	})
+
 	// Native Google / Apple sign-in: the app's SDK id_token for a session.
 	authPublic.Post("/oauth/:provider/token", rateLimiter.Limit(), oauthHandler.TokenSignIn)
 	authPublic.Post("/token", authUsersHandler.RefreshToken)
