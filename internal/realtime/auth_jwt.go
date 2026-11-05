@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	"github.com/rapibase/rapibase/internal/auth"
+	"github.com/rapibase/rapibase/internal/config"
 )
 
 // Roles recognised by the realtime auth validator.
@@ -44,8 +45,8 @@ func (v *JWTAuthValidator) Validate(apiKey, token string) (string, string, error
 	if apiKey == "" {
 		return "", "", errors.New("api key required")
 	}
-	switch apiKey {
-	case v.serviceKey:
+	switch {
+	case config.KeyEquals(apiKey, v.serviceKey):
 		if token != "" {
 			if claims, err := v.jwt.ValidateToken(token, auth.AudienceApp); err == nil {
 				return RoleService, claims.UserID, nil
@@ -57,7 +58,7 @@ func (v *JWTAuthValidator) Validate(apiKey, token string) (string, string, error
 			// authenticated user.
 		}
 		return RoleService, "", nil
-	case v.anonKey:
+	case config.KeyEquals(apiKey, v.anonKey):
 		if token == "" {
 			return RoleAnon, "", nil
 		}

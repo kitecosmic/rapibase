@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
 	"log"
@@ -392,4 +393,24 @@ func splitCSV(s string) []string {
 		}
 	}
 	return out
+}
+
+// KeyEquals compares an API key in constant time, so response timing
+// can't be used to guess a key byte by byte. An empty want never matches.
+func KeyEquals(given, want string) bool {
+	return want != "" && subtle.ConstantTimeCompare([]byte(given), []byte(want)) == 1
+}
+
+// KeyKind returns "service", "anon" or "" for an apikey value.
+func (c *Config) KeyKind(key string) string {
+	if key == "" {
+		return ""
+	}
+	if KeyEquals(key, c.ServiceKey) {
+		return "service"
+	}
+	if KeyEquals(key, c.AnonKey) {
+		return "anon"
+	}
+	return ""
 }

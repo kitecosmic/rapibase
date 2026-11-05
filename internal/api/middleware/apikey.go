@@ -33,13 +33,14 @@ func (m *APIKeyMiddleware) RequireAPIKey() fiber.Handler {
 		}
 
 		// SERVICE_KEY: Full access without JWT
-		if apiKey == m.cfg.ServiceKey {
+		kind := m.cfg.KeyKind(apiKey)
+		if kind == "service" {
 			c.Locals("apiKeyType", "service")
 			return c.Next()
 		}
 
 		// ANON_KEY: Requires valid JWT
-		if apiKey == m.cfg.AnonKey {
+		if kind == "anon" {
 			c.Locals("apiKeyType", "anon")
 
 			// Validate JWT for anon key
@@ -106,13 +107,8 @@ func (m *APIKeyMiddleware) RequireAPIKeyAuthOptional() fiber.Handler {
 			})
 		}
 
-		if apiKey == m.cfg.AnonKey {
-			c.Locals("apiKeyType", "anon")
-			return c.Next()
-		}
-
-		if apiKey == m.cfg.ServiceKey {
-			c.Locals("apiKeyType", "service")
+		if kind := m.cfg.KeyKind(apiKey); kind != "" {
+			c.Locals("apiKeyType", kind)
 			return c.Next()
 		}
 
@@ -150,7 +146,7 @@ func (m *APIKeyMiddleware) RequireServiceKey() fiber.Handler {
 			})
 		}
 
-		if key != m.cfg.ServiceKey {
+		if !config.KeyEquals(key, m.cfg.ServiceKey) {
 			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
 				"error": "Service key required for this operation",
 			})
@@ -169,10 +165,8 @@ func (m *APIKeyMiddleware) OptionalAPIKey() fiber.Handler {
 			return c.Next()
 		}
 
-		if apiKey == m.cfg.AnonKey {
-			c.Locals("apiKeyType", "anon")
-		} else if apiKey == m.cfg.ServiceKey {
-			c.Locals("apiKeyType", "service")
+		if kind := m.cfg.KeyKind(apiKey); kind != "" {
+			c.Locals("apiKeyType", kind)
 		}
 
 		return c.Next()

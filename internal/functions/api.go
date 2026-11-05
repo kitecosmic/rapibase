@@ -87,14 +87,14 @@ func (h *httpHandler) invoke(c *fiber.Ctx) error {
 	if !public {
 		key := c.Get("apikey")
 		bearerTok := bearer(c.Get("Authorization"))
-		if key == "" && (bearerTok == h.cfg.ServiceKey || bearerTok == h.cfg.AnonKey) {
+		if key == "" && h.cfg.KeyKind(bearerTok) != "" {
 			key = bearerTok
 			bearerTok = ""
 		}
-		switch key {
-		case h.cfg.ServiceKey:
+		switch h.cfg.KeyKind(key) {
+		case "service":
 			role = "service"
-		case h.cfg.AnonKey:
+		case "anon":
 			claims, err := h.jwt.ValidateToken(bearerTok, auth.AudienceApp)
 			if err != nil {
 				return c.Status(401).JSON(fiber.Map{"error": "con ANON_KEY hace falta el JWT del usuario (Authorization: Bearer)"})

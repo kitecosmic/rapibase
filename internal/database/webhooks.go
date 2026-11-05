@@ -177,7 +177,7 @@ func (db *DB) GetEnabledWebhooksByEvent(ctx context.Context, event string) ([]we
 		SELECT id, name, url, secret, events, headers, filter, enabled, created_at, updated_at
 		FROM _rapibase_webhooks
 		WHERE enabled = true AND events @> $1::jsonb
-	`, fmt.Sprintf(`["%s"]`, event))
+	`, eventJSON(event))
 	if err != nil {
 		return nil, err
 	}
@@ -291,4 +291,11 @@ func (db *DB) CleanupOldWebhookLogs(ctx context.Context, olderThan time.Duration
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+// eventJSON renders ["event"] for the jsonb containment check. Marshalled,
+// not formatted, so an event name with quotes can't break the JSON.
+func eventJSON(event string) string {
+	b, _ := json.Marshal([]string{event})
+	return string(b)
 }

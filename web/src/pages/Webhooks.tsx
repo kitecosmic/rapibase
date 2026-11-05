@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query'
 import { 
   Webhook, 
   Plus, 
@@ -15,7 +15,7 @@ import {
   ChevronDown,
   ChevronUp
 } from 'lucide-react'
-import { webhooks } from '../lib/api'
+import { webhooks, tables as tablesApi } from '../lib/api'
 
 interface FilterCond {
   column: string
@@ -364,6 +364,35 @@ function WebhookModal({ webhook, events, onClose, onSave, isLoading }: WebhookMo
   const [pickTable, setPickTable] = useState('*')
   const [pickTypes, setPickTypes] = useState<string[]>(['INSERT', 'UPDATE', 'DELETE'])
 
+  // Columns of the tables the webhook listens to, for the condition picker.
+  // "*" means every table, so then we offer the columns of all of them.
+  const watched = selectedEvents.some((e) => e.endsWith(':*'))
+    ? tables
+    : [...new Set(selectedEvents.map((e) => e.split(':')[1]).filter((t) => t && t !== '*'))].sort()
+  const schemas = useQueries({
+    queries: watched.map((t) => ({
+      queryKey: ['table-schema', t],
+      queryFn: () => tablesApi.get(t),
+      staleTime: 60_000,
+    })),
+  })
+  const columnTables = new Map<string, { type: string; tables: string[] }>()
+  schemas.forEach((q, i) => {
+    for (const col of (q.data?.columns ?? []) as { name: string; type: string }[]) {
+      const cur = columnTables.get(col.name)
+      if (cur) cur.tables.push(watched[i])
+      else columnTables.set(col.name, { type: col.type, tables: [watched[i]] })
+    }
+  })
+  const columnOptions = [...columnTables.entries()].sort(([a], [b]) => a.localeCompare(b))
+  const valueHint = (column: string) => {
+    const t = (columnTables.get(column)?.type ?? '').toLowerCase()
+    if (/bool/.test(t)) return 'true or false'
+    if (/int|numeric|decimal|real|double|float|serial/.test(t)) return 'number'
+    if (/timestamp|date/.test(t)) return '2026-01-31'
+    return 'value'
+  }
+
   const addEvents = () => {
     if (pickTypes.length === 0) return
     const added = pickTypes.map((t) => `${t}:${pickTable}`)
@@ -506,13 +535,25 @@ function WebhookModal({ webhook, events, onClose, onSave, isLoading }: WebhookMo
             <div className="space-y-2">
               {filter.map((cond, i) => (
                 <div key={i} className="flex gap-2 items-center">
-                  <input
-                    type="text"
+                  <select
                     value={cond.column}
                     onChange={(e) => setFilter((prev) => prev.map((c, j) => (j === i ? { ...c, column: e.target.value } : c)))}
-                    placeholder="column"
-                    className="flex-1 min-w-0 px-3 py-1.5 border border-gray-300 rounded-lg text-sm font-mono"
-                  />
+                    className="flex-1 min-w-0 px-2 py-1.5 border border-gray-300 rounded-lg bg-white text-sm font-mono"
+                    required
+                  >
+                    <option value="" disabled>
+                      {columnOptions.length ? 'column…' : 'pick events first'}
+                    </option>
+                    {cond.column && !columnTables.has(cond.column) && (
+                      <option value={cond.column}>{cond.column} (not found)</option>
+                    )}
+                    {columnOptions.map(([col, info]) => (
+                      <option key={col} value={col}>
+                        {col}
+                        {watched.length > 1 && info.tables.length < watched.length ? ` (${info.tables.join(', ')})` : ''}
+                      </option>
+                    ))}
+                  </select>
                   <select
                     value={cond.op}
                     onChange={(e) => setFilter((prev) => prev.map((c, j) => (j === i ? { ...c, op: e.target.value } : c)))}
@@ -527,7 +568,7 @@ function WebhookModal({ webhook, events, onClose, onSave, isLoading }: WebhookMo
                       type="text"
                       value={cond.value ?? ''}
                       onChange={(e) => setFilter((prev) => prev.map((c, j) => (j === i ? { ...c, value: e.target.value } : c)))}
-                      placeholder="value"
+                      placeholder={valueHint(cond.column)}
                       className="flex-1 min-w-0 px-3 py-1.5 border border-gray-300 rounded-lg text-sm"
                     />
                   )}
@@ -554,6 +595,10 @@ function WebhookModal({ webhook, events, onClose, onSave, isLoading }: WebhookMo
                   <code>status = paid</code> or <code>total &gt; 100</code>. Numbers compare numerically.
                 </p>
               )}
+              <p className="text-xs text-gray-500">
+                Need OR, math or calls to other services? Point the URL at a Rapibase function (
+                <code>/api/fn/name</code>, declared with <code>fn.http(name, handler, {"{"} public: true {"}"})</code>) and put the logic there in TypeScript.
+              </p>
             </div>
           </div>
 

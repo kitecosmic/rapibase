@@ -106,7 +106,7 @@ func SetupRealtime(ctx context.Context, app *fiber.App, db *database.DB, cfg *co
 			if provided == "" {
 				provided = c.Query("apikey")
 			}
-			if provided != serviceKey {
+			if !config.KeyEquals(provided, serviceKey) {
 				return fiber.NewError(fiber.StatusUnauthorized, "service key required")
 			}
 			return c.Next()
