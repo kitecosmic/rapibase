@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pglogrepl"
 
+	"github.com/rapibase/rapibase/internal/geo"
 	"github.com/rapibase/rapibase/internal/realtime/protocol"
 )
 
@@ -289,6 +290,12 @@ func parseValue(oid uint32, data []byte) any {
 			}
 		}
 		return append([]byte(nil), data...)
+	}
+	// PostGIS: el mismo GeoJSON que devuelve el REST
+	if oid >= geo.FirstUserOID {
+		if g, ok := geo.FromHexEWKB(s); ok {
+			return g
+		}
 	}
 	return s
 }

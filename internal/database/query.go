@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/rapibase/rapibase/internal/geo"
 	"github.com/rapibase/rapibase/internal/models"
 )
 
@@ -205,6 +206,11 @@ func insertRow(ctx context.Context, q Querier, tableName string, data map[string
 		return nil, fmt.Errorf("invalid table name")
 	}
 
+	geoCols, err := geoColumns(ctx, q, tableName, data)
+	if err != nil {
+		return nil, err
+	}
+
 	var columns []string
 	var placeholders []string
 	var values []interface{}
@@ -214,9 +220,10 @@ func insertRow(ctx context.Context, q Querier, tableName string, data map[string
 		if !isValidIdentifier(col) {
 			return nil, fmt.Errorf("invalid column name: %s", col)
 		}
+		ph, v := geoParam(geoCols, col, val, i)
 		columns = append(columns, quoteIdentifier(col))
-		placeholders = append(placeholders, fmt.Sprintf("$%d", i))
-		values = append(values, val)
+		placeholders = append(placeholders, ph)
+		values = append(values, v)
 		i++
 	}
 
@@ -319,6 +326,11 @@ func (db *DB) UpdateRow(ctx context.Context, tableName string, id interface{}, d
 }
 
 func updateRow(ctx context.Context, q Querier, tableName, pk string, id interface{}, data map[string]interface{}) (map[string]interface{}, error) {
+	geoCols, err := geoColumns(ctx, q, tableName, data)
+	if err != nil {
+		return nil, err
+	}
+
 	var setClauses []string
 	var values []interface{}
 	i := 1
@@ -327,8 +339,9 @@ func updateRow(ctx context.Context, q Querier, tableName, pk string, id interfac
 		if !isValidIdentifier(col) {
 			return nil, fmt.Errorf("invalid column name: %s", col)
 		}
-		setClauses = append(setClauses, fmt.Sprintf("%s = $%d", quoteIdentifier(col), i))
-		values = append(values, val)
+		ph, v := geoParam(geoCols, col, val, i)
+		setClauses = append(setClauses, quoteIdentifier(col)+" = "+ph)
+		values = append(values, v)
 		i++
 	}
 
@@ -560,6 +573,15 @@ func normalizeValue(oid uint32, v interface{}) interface{} {
 	case pgtype.UUIDOID:
 		if b, ok := v.([16]byte); ok {
 			return formatUUID(b)
+		}
+	}
+	// PostGIS (geometry/geography) llega como EWKB en hex: se devuelve
+	// GeoJSON. Solo tipos de extensión; un text nunca se toca.
+	if oid >= geo.FirstUserOID {
+		if s, ok := v.(string); ok {
+			if g, ok := geo.FromHexEWKB(s); ok {
+				return g
+			}
 		}
 	}
 	return v
