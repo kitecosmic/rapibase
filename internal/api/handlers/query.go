@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/rapibase/rapibase/internal/database"
 	"github.com/rapibase/rapibase/internal/models"
 )
@@ -161,12 +162,59 @@ func (h *QueryHandler) CallRPC(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": err.Error()})
 	}
 	if err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-			"error": err.Error(),
-		})
+		status, body := rpcError(err)
+		return c.Status(status).JSON(body)
 	}
 
 	return c.JSON(data)
+}
+
+// rpcError convierte el error de una llamada RPC en status + cuerpo JSON.
+// Un error de Postgres (RAISE EXCEPTION, constraint, permisos…) llega con
+// sus partes por separado — antes era un solo texto
+// "ERROR: … (SQLSTATE P0001)" que el cliente tenía que parsear:
+//
+//	{"error": "saldo insuficiente", "code": "P0001",
+//	 "message": "saldo insuficiente", "detail": "...", "hint": "..."}
+//
+// "error" se mantiene (mismo campo que el resto de la API) con el mensaje
+// limpio. Lo que levanta la function con RAISE, USING ERRCODE/DETAIL/HINT
+// incluidos, llega tal cual.
+func rpcError(err error) (int, fiber.Map) {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return fiber.StatusBadRequest, fiber.Map{"error": err.Error()}
+	}
+	body := fiber.Map{
+		"error":   pgErr.Message,
+		"code":    pgErr.Code,
+		"message": pgErr.Message,
+	}
+	if pgErr.Detail != "" {
+		body["detail"] = pgErr.Detail
+	}
+	if pgErr.Hint != "" {
+		body["hint"] = pgErr.Hint
+	}
+	return rpcStatus(pgErr.Code), body
+}
+
+// rpcStatus elige el status HTTP según el SQLSTATE.
+func rpcStatus(code string) int {
+	switch {
+	case code == "42501": // insufficient_privilege
+		return fiber.StatusForbidden
+	case code == "42883", code == "P0002": // función inexistente / no_data_found
+		return fiber.StatusNotFound
+	case code == "23505": // unique_violation
+		return fiber.StatusConflict
+	case code == "57014": // query_canceled (timeout)
+		return fiber.StatusGatewayTimeout
+	case strings.HasPrefix(code, "08"), strings.HasPrefix(code, "53"), strings.HasPrefix(code, "XX"):
+		// conexión, recursos, error interno: no es culpa del que llama
+		return fiber.StatusInternalServerError
+	}
+	return fiber.StatusBadRequest
 }
 
 // ImportSQL imports data from SQL

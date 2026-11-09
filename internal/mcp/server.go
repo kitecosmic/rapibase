@@ -65,10 +65,13 @@ Recommended flow:
    Postgres enforces as row-level security on the files.
 7. Row-level security: list_rls shows which tables are protected;
    set_rls(table, mode, owner_column) configures it (modes: owner /
-   authenticated / public / custom) and disable_rls removes it. Use mode
-   "owner" for per-user data — SERVICE_KEY access always bypasses RLS.
+   authenticated / public / read_only / custom) and disable_rls removes
+   it. Use mode "owner" for per-user data, "read_only" for data anyone
+   reads but only the server writes (catalogs, prices) — SERVICE_KEY
+   access always bypasses RLS. owner / authenticated / public always let
+   signed-in users write; they are not read-only.
    Visitors WITHOUT a session (ANON_KEY, no Authorization header) can
-   only GET tables in mode "public" and call functions granted with
+   only GET tables in mode "public" or "read_only" and call functions granted with
    GRANT EXECUTE ON FUNCTION fn TO rapibase_anon; everything else is 401.
 
 Beyond MCP, the same instance serves the full HTTP API the app you are

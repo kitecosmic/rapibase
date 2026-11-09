@@ -44,12 +44,14 @@ func (h *Handler) registerRLSTools() {
 				"owner_column must be a uuid column and is defaulted to auth.uid() on insert), "+
 				"'authenticated' (any logged-in user reads/writes everything), "+
 				"'public' (anyone reads, even visitors with only the ANON_KEY and no session; logged-in users write), "+
+				"'read_only' (anyone reads, even visitors with no session; NOBODY writes through the API — "+
+				"only SERVICE_KEY, the dashboard and server functions can; use it for catalogs and reference data), "+
 				"'custom' (RLS enabled with NO policies — default-deny until you add "+
 				"your own policies via execute_sql; auth.uid() is available in policy SQL). "+
 				"SERVICE_KEY access always bypasses RLS. Idempotent: re-running switches mode.",
 		),
 		mcp.WithString("table", mcp.Required(), mcp.Description("Exact table name.")),
-		mcp.WithString("mode", mcp.Required(), mcp.Description("owner | authenticated | public | custom")),
+		mcp.WithString("mode", mcp.Required(), mcp.Description("owner | authenticated | public | read_only | custom")),
 		mcp.WithString("owner_column",
 			mcp.Description("Required for mode 'owner': uuid column that stores the owner's auth.uid()."),
 		),

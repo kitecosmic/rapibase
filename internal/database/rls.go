@@ -79,7 +79,7 @@ func (db *DB) runData(ctx context.Context, fn func(Querier) error) error {
 		}
 		err := db.runAsRole(ctx, role, ac.ClaimsJSON, fn)
 		if ac.Anonymous && isRLSDenied(err) {
-			return &NotPublicError{Msg: "This resource is not public: sign in, or open it to visitors without a session (table in RLS mode \"public\", or GRANT EXECUTE ON FUNCTION ... TO rapibase_anon)."}
+			return &NotPublicError{Msg: "This resource is not public: sign in, or open it to visitors without a session (table in RLS mode \"public\" or \"read_only\", or GRANT EXECUTE ON FUNCTION ... TO rapibase_anon)."}
 		}
 		return err
 	}
@@ -131,6 +131,7 @@ func (db *DB) runAsRole(ctx context.Context, role, claimsJSON string, fn func(Qu
 var rapibasePolicyNames = []string{
 	"rapibase_owner_sel", "rapibase_owner_ins", "rapibase_owner_upd", "rapibase_owner_del",
 	"rapibase_auth_all", "rapibase_public_sel", "rapibase_public_write",
+	"rapibase_readonly_sel",
 }
 
 // RLS modes accepted by SetTableRLS.
@@ -138,6 +139,7 @@ const (
 	RLSModeOwner         = "owner"         // each user only their own rows (ownerColumn = auth.uid())
 	RLSModeAuthenticated = "authenticated" // any logged-in user, all rows
 	RLSModePublic        = "public"        // anyone can read; logged-in users can write
+	RLSModeReadOnly      = "read_only"     // anyone can read; nobody writes through the API (only service key / functions)
 	RLSModeCustom        = "custom"        // grant + RLS on, no built-in policy; admin writes their own
 )
 
@@ -151,6 +153,9 @@ const (
 //   - authenticated: any logged-in user can read/write every row.
 //   - public:        anyone (even without a token) can read; logged-in
 //                    users can write.
+//   - read_only:     anyone (even without a token) can read; nobody can
+//                    write through the public API — only the service key,
+//                    the dashboard and server functions.
 //
 // The privileged pool role (admin + service key paths) is never the
 // "authenticated"/"anon" role, so it always keeps full access.
@@ -168,6 +173,10 @@ func (db *DB) SetTableRLS(ctx context.Context, table, mode, ownerColumn string) 
 		// superuser) used by admin + service-key keeps full access.
 		fmt.Sprintf("ALTER TABLE %s ENABLE ROW LEVEL SECURITY", qt),
 	}
+	// Visitors without a session never read owner/authenticated tables.
+	// Moving a table off "public" or "read_only" used to leave their
+	// SELECT grant behind. Custom keeps whatever grants the admin wrote.
+	revokeAnon := fmt.Sprintf("REVOKE ALL ON %s FROM rapibase_anon", qt)
 	for _, p := range rapibasePolicyNames {
 		stmts = append(stmts, fmt.Sprintf("DROP POLICY IF EXISTS %s ON %s", p, qt))
 	}
@@ -191,6 +200,7 @@ func (db *DB) SetTableRLS(ctx context.Context, table, mode, ownerColumn string) 
 			// reverting an identity the admin may have chosen themselves
 			// (custom mode writes its own SQL) is the worse trade.
 			fmt.Sprintf("ALTER TABLE %s REPLICA IDENTITY FULL", qt),
+			revokeAnon,
 			fmt.Sprintf("CREATE POLICY rapibase_owner_sel ON %s FOR SELECT TO rapibase_authenticated USING (%s = auth.uid())", qt, qc),
 			fmt.Sprintf("CREATE POLICY rapibase_owner_ins ON %s FOR INSERT TO rapibase_authenticated WITH CHECK (%s = auth.uid())", qt, qc),
 			fmt.Sprintf("CREATE POLICY rapibase_owner_upd ON %s FOR UPDATE TO rapibase_authenticated USING (%s = auth.uid()) WITH CHECK (%s = auth.uid())", qt, qc, qc),
@@ -198,6 +208,7 @@ func (db *DB) SetTableRLS(ctx context.Context, table, mode, ownerColumn string) 
 		)
 	case RLSModeAuthenticated:
 		stmts = append(stmts,
+			revokeAnon,
 			fmt.Sprintf("CREATE POLICY rapibase_auth_all ON %s FOR ALL TO rapibase_authenticated USING (true) WITH CHECK (true)", qt),
 		)
 	case RLSModePublic:
@@ -206,12 +217,21 @@ func (db *DB) SetTableRLS(ctx context.Context, table, mode, ownerColumn string) 
 			fmt.Sprintf("CREATE POLICY rapibase_public_sel ON %s FOR SELECT TO rapibase_anon, rapibase_authenticated USING (true)", qt),
 			fmt.Sprintf("CREATE POLICY rapibase_public_write ON %s FOR ALL TO rapibase_authenticated USING (true) WITH CHECK (true)", qt),
 		)
+	case RLSModeReadOnly:
+		stmts = append(stmts,
+			// Writes are refused by privilege, not just by a missing
+			// policy: the caller gets a clear "permission denied" instead
+			// of an UPDATE/DELETE that silently touches zero rows.
+			fmt.Sprintf("REVOKE INSERT, UPDATE, DELETE ON %s FROM rapibase_authenticated", qt),
+			fmt.Sprintf("GRANT SELECT ON %s TO rapibase_anon", qt),
+			fmt.Sprintf("CREATE POLICY rapibase_readonly_sel ON %s FOR SELECT TO rapibase_anon, rapibase_authenticated USING (true)", qt),
+		)
 	case RLSModeCustom:
 		// Grant + enable RLS only (done in base above), with NO built-in
 		// policy. The admin writes their own policies via SQL. Until they
 		// add one, the table is default-deny for the public path.
 	default:
-		return fmt.Errorf("invalid mode %q (use owner, authenticated, or public)", mode)
+		return fmt.Errorf("invalid mode %q (use owner, authenticated, public, read_only or custom)", mode)
 	}
 
 	for _, s := range stmts {

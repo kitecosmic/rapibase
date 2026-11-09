@@ -19,7 +19,7 @@ import (
 // key alone never reads table data — it needs a user JWT. A table with
 // no RLS config therefore reaches authenticated subscribers (exactly
 // what REST does once RLS is off) but never anonymous ones. Tables in
-// mode "public" are the deliberate opt-out: they stream to anonymous
+// mode "public" or "read_only" are the deliberate opt-out: they stream to anonymous
 // subscribers too, which is what makes public live feeds (order
 // tracking, scoreboards) work without a login.
 //
@@ -85,7 +85,7 @@ func (a *rlsRowAuthorizer) Authorize(role, userID, schema, table string, row map
 	}
 
 	switch cfg.Mode {
-	case database.RLSModePublic:
+	case database.RLSModePublic, database.RLSModeReadOnly:
 		return true
 	case database.RLSModeAuthenticated:
 		return authed

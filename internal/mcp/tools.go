@@ -387,7 +387,13 @@ func (h *Handler) registerSQLTools() {
 				"`delete_row` for ordinary CRUD and reserve this tool for "+
 				"joins, aggregates, migrations or ad-hoc analysis. Use $1, "+
 				"$2, … placeholders and pass values via `params` to avoid "+
-				"injection.",
+				"injection.\n\n"+
+				"Several statements separated by `;` run as one script, but "+
+				"then: no `params` (Postgres only accepts one statement per "+
+				"parameterised call) and no rows come back (only "+
+				"rows_affected) — run the SELECT in its own call.\n\n"+
+				"Each call is capped at `timeout_seconds` (default 60, max "+
+				"600); past that Postgres cancels it and releases its locks.",
 		),
 		mcp.WithString("sql",
 			mcp.Required(),
@@ -395,6 +401,9 @@ func (h *Handler) registerSQLTools() {
 		),
 		mcp.WithArray("params",
 			mcp.Description("Positional parameters substituted for $1, $2, … in the SQL."),
+		),
+		mcp.WithNumber("timeout_seconds",
+			mcp.Description("Max run time in seconds (default 60, max 600). Raise it only for long migrations or index builds."),
 		),
 		mcp.WithToolAnnotation(destructiveNonIdempotentAnnotation),
 		mcp.WithTitleAnnotation("Execute SQL"),
@@ -412,12 +421,31 @@ func (h *Handler) registerSQLTools() {
 		if raw, ok := req.GetArguments()["params"].([]any); ok {
 			params = raw
 		}
-		result, err := h.db.ExecuteQuery(ctx, sql, params)
+		timeout := sqlTimeout(req.GetFloat("timeout_seconds", 0))
+		result, err := h.db.ExecuteQueryWithTimeout(ctx, sql, params, timeout)
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
 		return jsonResult(result)
 	})
+}
+
+const (
+	defaultSQLTimeout = 60 * time.Second
+	maxSQLTimeout     = 600 * time.Second
+)
+
+// sqlTimeout convierte el timeout_seconds pedido en una duración acotada:
+// sin valor (o inválido) → 60 s; nunca más de 600 s.
+func sqlTimeout(seconds float64) time.Duration {
+	if seconds <= 0 {
+		return defaultSQLTimeout
+	}
+	d := time.Duration(seconds * float64(time.Second))
+	if d > maxSQLTimeout {
+		return maxSQLTimeout
+	}
+	return d
 }
 
 // ---------------------------------------------------------------------------

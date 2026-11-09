@@ -239,6 +239,7 @@ function RlsRow({ table }: { table: string }) {
                 <option value="owner">owner — each user only their rows</option>
                 <option value="authenticated">authenticated — any logged-in user</option>
                 <option value="public">public — anyone can read</option>
+                <option value="read_only">read_only — anyone reads, nobody writes</option>
               </select>
             </label>
             {mode === 'owner' && (

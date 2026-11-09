@@ -22,6 +22,11 @@ const MODES = [
     desc: 'Anyone can read even without logging in; signed-in users can write. For public catalogs / reference data.',
   },
   {
+    id: 'read_only',
+    title: 'Read-only — anyone can read, nobody writes',
+    desc: 'Anyone can read even without logging in, and nobody can write through the API. Only the service key, this dashboard and server functions can change rows. For catalogs, prices and reference data.',
+  },
+  {
     id: 'custom',
     title: 'Custom — write your own policies (advanced)',
     desc: 'Grants API access and turns RLS on with no built-in policy. Write your own SQL policy below. Until you add one, only the service key can read.',

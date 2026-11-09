@@ -2,12 +2,15 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/rapibase/rapibase/internal/auth"
 	"github.com/rapibase/rapibase/internal/config"
 	"github.com/rapibase/rapibase/internal/database"
@@ -586,6 +589,35 @@ func (h *AuthUsersHandler) ListUsers(c *fiber.Ctx) error {
 	})
 }
 
+// GetUserByID returns one auth user by id (admin only). 404 if it does not
+// exist or the id is not a valid uuid.
+func (h *AuthUsersHandler) GetUserByID(c *fiber.Ctx) error {
+	user, err := h.db.GetAuthUserByID(c.UserContext(), c.Params("id"))
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.Is(err, pgx.ErrNoRows) || (errors.As(err, &pgErr) && pgErr.Code == "22P02") {
+			return fiber.NewError(fiber.StatusNotFound, "User not found")
+		}
+		return fiber.NewError(fiber.StatusInternalServerError, "Failed to fetch user")
+	}
+	return c.JSON(fiber.Map{
+		"user": database.AuthUserPublic{
+			ID:            user.ID,
+			Email:         user.Email,
+			EmailVerified: user.EmailVerified,
+			Phone:         user.Phone,
+			PhoneVerified: user.PhoneVerified,
+			FullName:      user.FullName,
+			AvatarURL:     user.AvatarURL,
+			Role:          user.Role,
+			Metadata:      user.Metadata,
+			Provider:      user.Provider,
+			LastSignIn:    user.LastSignIn,
+			CreatedAt:     user.CreatedAt,
+		},
+	})
+}
+
 // CreateUser creates a new auth user (admin only)
 func (h *AuthUsersHandler) CreateUser(c *fiber.Ctx) error {
 	ctx := context.Background()
@@ -772,6 +804,14 @@ func (h *AuthUsersHandler) ListUsersAPI(c *fiber.Ctx) error {
 		return err
 	}
 	return h.ListUsers(c)
+}
+
+// GetUserByIDAPI returns one auth user (SERVICE_KEY only)
+func (h *AuthUsersHandler) GetUserByIDAPI(c *fiber.Ctx) error {
+	if err := h.requireServiceKey(c); err != nil {
+		return err
+	}
+	return h.GetUserByID(c)
 }
 
 // CreateUserAPI creates a new auth user (SERVICE_KEY only)

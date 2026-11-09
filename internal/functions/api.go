@@ -145,6 +145,12 @@ func (h *httpHandler) invoke(c *fiber.Ctx) error {
 // writeResult mapea el valor devuelto por el handler a la respuesta HTTP:
 // nil → 204; string → texto; objeto {status?, headers?, json?|body?} →
 // respuesta explícita; cualquier otra cosa → JSON 200.
+//
+// Un objeto solo cuenta como respuesta explícita si TODAS sus claves son
+// status/headers/json/body y status (si está) es un número 100–599. Antes
+// bastaba con que tuviera "status": un dato normal como
+// {status: "activo", nombre: "x"} se tomaba por respuesta y al cliente le
+// llegaba "OK", perdiendo el cuerpo sin aviso.
 func writeResult(c *fiber.Ctx, result interface{}) error {
 	if result == nil {
 		return c.SendStatus(204)
@@ -154,16 +160,7 @@ func writeResult(c *fiber.Ctx, result interface{}) error {
 		return c.SendString(s)
 	}
 	if m, ok := result.(map[string]interface{}); ok {
-		_, hasStatus := m["status"]
-		_, hasBody := m["body"]
-		_, hasJSON := m["json"]
-		if hasStatus || hasBody || hasJSON {
-			status := 200
-			if v, ok := m["status"]; ok {
-				if f, ok := toInt(v); ok && f >= 100 && f <= 599 {
-					status = f
-				}
-			}
+		if status, ok := explicitResponse(m); ok {
 			if hdrs, ok := m["headers"].(map[string]interface{}); ok {
 				for k, v := range hdrs {
 					c.Set(k, fmt.Sprint(v))
@@ -183,6 +180,41 @@ func writeResult(c *fiber.Ctx, result interface{}) error {
 		}
 	}
 	return c.JSON(result)
+}
+
+// explicitResponse decide si el objeto devuelto describe una respuesta
+// HTTP ({status?, headers?, json?|body?}) y con qué status. Ver writeResult.
+func explicitResponse(m map[string]interface{}) (int, bool) {
+	if len(m) == 0 {
+		return 0, false
+	}
+	for k := range m {
+		switch k {
+		case "status", "headers", "json", "body":
+		default:
+			return 0, false
+		}
+	}
+	_, hasStatus := m["status"]
+	_, hasBody := m["body"]
+	_, hasJSON := m["json"]
+	if !hasStatus && !hasBody && !hasJSON {
+		return 0, false
+	}
+	if h, ok := m["headers"]; ok && h != nil {
+		if _, ok := h.(map[string]interface{}); !ok {
+			return 0, false
+		}
+	}
+	status := 200
+	if hasStatus {
+		f, ok := toInt(m["status"])
+		if !ok || f < 100 || f > 599 {
+			return 0, false
+		}
+		status = f
+	}
+	return status, true
 }
 
 func toInt(v interface{}) (int, bool) {

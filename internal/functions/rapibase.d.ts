@@ -31,7 +31,9 @@ interface FnRequest {
  *  - un objeto/array cualquiera → JSON 200
  *  - un string → texto plano 200
  *  - null/undefined → 204
- *  - {status?, headers?, json?} o {status?, headers?, body?} → respuesta explícita
+ *  - {status?, headers?, json?} o {status?, headers?, body?} → respuesta explícita,
+ *    solo si el objeto no tiene OTRAS claves y status es un número 100–599.
+ *    Un dato como {status: "activo", nombre: "x"} sale tal cual como JSON 200.
  */
 type FnResponse =
   | { status?: number; headers?: Record<string, string>; json?: unknown; body?: string }

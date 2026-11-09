@@ -2,12 +2,14 @@ package database
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/rapibase/rapibase/internal/geo"
 	"github.com/rapibase/rapibase/internal/models"
@@ -525,6 +527,55 @@ var returningRe = regexp.MustCompile(`(?i)\bRETURNING\b`)
 // dashboard SQL console and always runs with full privileges — it is
 // never exposed on the public API surface.
 func (db *DB) ExecuteQuery(ctx context.Context, sql string, params []interface{}) (*models.QueryResult, error) {
+	return executeQueryOn(ctx, db.Pool, sql, params)
+}
+
+// ExecuteQueryWithTimeout es ExecuteQuery con un tope de duración que
+// impone Postgres (statement_timeout), no solo el cliente: si la consulta
+// se pasa, el servidor la aborta y suelta los bloqueos. Antes, cuando el
+// cliente MCP dejaba de esperar, la consulta seguía corriendo y bloqueando
+// tablas. timeout <= 0 significa sin tope.
+//
+// Usa una conexión propia del pool con SET (de sesión, no SET LOCAL, para
+// que un script con su propio BEGIN/COMMIT o un CREATE INDEX CONCURRENTLY
+// siga funcionando) y la deja como estaba antes de devolverla. Si no puede
+// limpiarla, la cierra para que el pool la descarte.
+func (db *DB) ExecuteQueryWithTimeout(ctx context.Context, sql string, params []interface{}, timeout time.Duration) (*models.QueryResult, error) {
+	if timeout <= 0 {
+		return db.ExecuteQuery(ctx, sql, params)
+	}
+	conn, err := db.Pool.Acquire(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Release()
+
+	if _, err := conn.Exec(ctx, fmt.Sprintf("SET statement_timeout = %d", timeout.Milliseconds())); err != nil {
+		return nil, err
+	}
+	defer func() {
+		rctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, err := conn.Exec(rctx, "RESET statement_timeout"); err != nil {
+			_ = conn.Conn().Close(rctx)
+		}
+	}()
+
+	// Margen sobre el tope del servidor: normalmente corta Postgres (con un
+	// error claro); el contexto queda de red de seguridad.
+	qctx, cancel := context.WithTimeout(ctx, timeout+5*time.Second)
+	defer cancel()
+	res, err := executeQueryOn(qctx, conn, sql, params)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "57014" {
+			return nil, fmt.Errorf("la consulta superó el límite de %s y Postgres la canceló (no quedó corriendo): %w", timeout, err)
+		}
+	}
+	return res, err
+}
+
+func executeQueryOn(ctx context.Context, q Querier, sql string, params []interface{}) (*models.QueryResult, error) {
 	start := time.Now()
 
 	// ¿Devuelve filas? SELECT y compañía, más VALUES/TABLE, más cualquier
@@ -547,9 +598,9 @@ func (db *DB) ExecuteQuery(ctx context.Context, sql string, params []interface{}
 	}
 
 	if isSelect {
-		rows, err := db.Pool.Query(ctx, sql, params...)
+		rows, err := q.Query(ctx, sql, params...)
 		if err != nil {
-			return nil, err
+			return nil, explainMultiStatement(err, params)
 		}
 		defer rows.Close()
 
@@ -571,15 +622,25 @@ func (db *DB) ExecuteQuery(ctx context.Context, sql string, params []interface{}
 	}
 
 	// Non-SELECT query
-	result, err := db.Pool.Exec(ctx, sql, params...)
+	result, err := q.Exec(ctx, sql, params...)
 	if err != nil {
-		return nil, err
+		return nil, explainMultiStatement(err, params)
 	}
 
 	return &models.QueryResult{
 		RowsAffected: result.RowsAffected(),
 		Duration:     time.Since(start).String(),
 	}, nil
+}
+
+// explainMultiStatement aclara el error que da Postgres al mandar varias
+// sentencias con parámetros: es un límite del protocolo (una sentencia
+// preparada lleva un solo comando), no algo que se pueda evitar acá.
+func explainMultiStatement(err error, params []interface{}) error {
+	if len(params) > 0 && strings.Contains(err.Error(), "cannot insert multiple commands into a prepared statement") {
+		return fmt.Errorf("con parámetros ($1, $2, …) va una sola sentencia por llamada: separá el script en varias llamadas o mandalo sin parámetros (%w)", err)
+	}
+	return err
 }
 
 // Helper to convert pgx rows to maps
