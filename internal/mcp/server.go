@@ -67,6 +67,9 @@ Recommended flow:
    set_rls(table, mode, owner_column) configures it (modes: owner /
    authenticated / public / custom) and disable_rls removes it. Use mode
    "owner" for per-user data — SERVICE_KEY access always bypasses RLS.
+   Visitors WITHOUT a session (ANON_KEY, no Authorization header) can
+   only GET tables in mode "public" and call functions granted with
+   GRANT EXECUTE ON FUNCTION fn TO rapibase_anon; everything else is 401.
 
 Beyond MCP, the same instance serves the full HTTP API the app you are
 building will consume: auth for end users at /api/v1/auth/*, REST CRUD at

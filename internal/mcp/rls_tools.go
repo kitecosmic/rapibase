@@ -43,7 +43,7 @@ func (h *Handler) registerRLSTools() {
 				"'owner' (each app user only sees rows where owner_column = auth.uid(); "+
 				"owner_column must be a uuid column and is defaulted to auth.uid() on insert), "+
 				"'authenticated' (any logged-in user reads/writes everything), "+
-				"'public' (anyone reads, logged-in users write), "+
+				"'public' (anyone reads, even visitors with only the ANON_KEY and no session; logged-in users write), "+
 				"'custom' (RLS enabled with NO policies — default-deny until you add "+
 				"your own policies via execute_sql; auth.uid() is available in policy SQL). "+
 				"SERVICE_KEY access always bypasses RLS. Idempotent: re-running switches mode.",

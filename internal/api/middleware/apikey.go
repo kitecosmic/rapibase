@@ -20,7 +20,8 @@ func NewAPIKeyMiddleware(cfg *config.Config, jwtManager *auth.JWTManager) *APIKe
 }
 
 // RequireAPIKey validates the apikey header for public API access
-// - ANON_KEY: Requires valid JWT (for authenticated app users)
+// - ANON_KEY: Requires valid JWT (for authenticated app users). /rest y /rpc
+//   usan RequireAPIKeyOrAnonymous, que admite visitantes sin sesión.
 // - SERVICE_KEY: Full access without JWT (for backend/admin)
 func (m *APIKeyMiddleware) RequireAPIKey() fiber.Handler {
 	return func(c *fiber.Ctx) error {
@@ -92,6 +93,42 @@ func (m *APIKeyMiddleware) RequireAPIKey() fiber.Handler {
 		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
 			"error": "Invalid API key",
 		})
+	}
+}
+
+// RequireAPIKeyOrAnonymous es RequireAPIKey, pero la clave pública SIN
+// header Authorization ya no da 401 en los métodos de anonMethods: la
+// request sigue como visitante sin sesión y sus consultas corren como
+// rapibase_anon con RLS. Así el modo RLS "public" ("cualquiera puede
+// leer") se cumple de verdad. Un Authorization presente pero inválido o
+// vencido sigue dando 401: degradar en silencio a anónimo escondería
+// una sesión caída.
+func (m *APIKeyMiddleware) RequireAPIKeyOrAnonymous(anonMethods ...string) fiber.Handler {
+	withJWT := m.RequireAPIKey()
+	return func(c *fiber.Ctx) error {
+		if c.Get("Authorization") != "" || m.cfg.KeyKind(c.Get("apikey")) != "anon" {
+			return withJWT(c)
+		}
+		allowed := false
+		for _, meth := range anonMethods {
+			if c.Method() == meth {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
+				"error": "Authorization required. Visitors without a session can only read; include 'Authorization: Bearer <token>' to write.",
+			})
+		}
+		c.Locals("apiKeyType", "anon")
+		c.Locals("anonymous", true)
+		c.SetUserContext(database.WithAuth(c.Context(), database.AuthContext{
+			Enforce:    true,
+			Anonymous:  true,
+			ClaimsJSON: `{"role":"anon"}`,
+		}))
+		return c.Next()
 	}
 }
 

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
@@ -215,6 +216,9 @@ func (h *TablesHandler) GetRows(c *fiber.Ctx) error {
 	})
 
 	result, err := h.db.GetRows(c.UserContext(), tableName, params)
+	if errors.Is(err, database.ErrNotPublic) {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": err.Error()})
+	}
 	if err != nil {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": err.Error(),

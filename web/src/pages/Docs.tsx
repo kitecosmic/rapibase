@@ -244,6 +244,13 @@ Headers: {
 }
 \`\`\`
 
+### With Anon Key, no session (read-only visitors)
+\`\`\`
+GET /api/v1/rest/products
+Headers: { "apikey": "ANON_KEY" }
+\`\`\`
+Without \`Authorization\` the request runs as \`rapibase_anon\`: it can only **GET** tables whose RLS mode is \`public\`. Any other table, and every write, returns 401. An expired or invalid token still returns 401 (it is never downgraded to anonymous). For RPC without a session the function needs an explicit \`GRANT EXECUTE ON FUNCTION fn TO rapibase_anon\`.
+
 ### With Service Key (no JWT needed)
 \`\`\`
 GET /api/v1/rest/products
@@ -948,6 +955,7 @@ GET /api/v1/rest/{table}?status.eq=active&price.gt=100
 GET /api/v1/rest/{table}?select=id,name,price
 
 Headers (Anon Key): { "apikey": "ANON_KEY", "Authorization": "Bearer TOKEN" }
+Headers (visitor, no session): { "apikey": "ANON_KEY" }  -> only tables in RLS mode "public"
 Headers (Service Key): { "apikey": "SERVICE_KEY" }
 
 Response: { "data": [...], "page": 1, "page_size": 50, "total_rows": N, "total_pages": N }`} />

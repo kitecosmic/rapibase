@@ -417,6 +417,20 @@ func deleteRow(ctx context.Context, q Querier, tableName, pk string, id interfac
 // inject SQL. Functions with no args accept a nil or empty map. Runs
 // under RLS for authenticated app users.
 func (db *DB) CallFunction(ctx context.Context, name string, args map[string]interface{}) ([]map[string]interface{}, error) {
+	if IsAnonymous(ctx) {
+		// Postgres da EXECUTE a PUBLIC por defecto en toda función nueva,
+		// así que "tiene permiso" no alcanza: para un visitante sin sesión
+		// exigimos un GRANT explícito a rapibase_anon (opt-in por función).
+		ok, err := db.anonCanExecute(ctx, name)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, &NotPublicError{Msg: fmt.Sprintf(
+				"Function %q is not public: sign in, or run GRANT EXECUTE ON FUNCTION %s TO rapibase_anon to let visitors without a session call it.",
+				name, quoteIdentifier(name))}
+		}
+	}
 	var res []map[string]interface{}
 	err := db.runData(ctx, func(q Querier) error {
 		var e error
@@ -424,6 +438,27 @@ func (db *DB) CallFunction(ctx context.Context, name string, args map[string]int
 		return e
 	})
 	return res, err
+}
+
+// anonCanExecute dice si alguna función public.<name> tiene EXECUTE
+// concedido explícitamente a rapibase_anon (no vale el grant a PUBLIC).
+func (db *DB) anonCanExecute(ctx context.Context, name string) (bool, error) {
+	if !isValidIdentifier(name) {
+		return false, fmt.Errorf("invalid function name")
+	}
+	var ok bool
+	err := db.Pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM pg_proc p
+			CROSS JOIN LATERAL aclexplode(p.proacl) a
+			JOIN pg_roles r ON r.oid = a.grantee
+			WHERE p.pronamespace = 'public'::regnamespace
+			  AND p.proname = $1
+			  AND r.rolname = 'rapibase_anon'
+			  AND a.privilege_type = 'EXECUTE'
+		)`, name).Scan(&ok)
+	return ok, err
 }
 
 func callFunction(ctx context.Context, q Querier, name string, args map[string]interface{}) ([]map[string]interface{}, error) {
@@ -443,7 +478,13 @@ func callFunction(ctx context.Context, q Querier, name string, args map[string]i
 		i++
 	}
 
-	query := fmt.Sprintf("SELECT * FROM %s(%s)", quoteIdentifier(name), strings.Join(argPairs, ", "))
+	fn := quoteIdentifier(name)
+	if IsAnonymous(ctx) {
+		// Calificada: la función que se ejecuta es la misma public.<name>
+		// cuyo GRANT verificó anonCanExecute, nunca una de pg_catalog.
+		fn = "public." + fn
+	}
+	query := fmt.Sprintf("SELECT * FROM %s(%s)", fn, strings.Join(argPairs, ", "))
 
 	rows, err := q.Query(ctx, query, values...)
 	if err != nil {
@@ -543,7 +584,9 @@ func (db *DB) ExecuteQuery(ctx context.Context, sql string, params []interface{}
 
 // Helper to convert pgx rows to maps
 func pgxRowsToMaps(rows pgx.Rows) ([]map[string]interface{}, error) {
-	var result []map[string]interface{}
+	// Slice vacío, no nil: sin filas el JSON tiene que ser [] y no null,
+	// o el cliente que hace .map()/.length se rompe (REST "data" y RPC).
+	result := []map[string]interface{}{}
 
 	fieldDescriptions := rows.FieldDescriptions()
 

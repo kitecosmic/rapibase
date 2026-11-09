@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
@@ -28,7 +29,30 @@ type AuthContext struct {
 	// service key and the admin dashboard, which keep full access.
 	Enforce    bool
 	ClaimsJSON string
+	// Anonymous marca a un visitante sin sesión (clave pública sin JWT):
+	// sus consultas corren como rapibase_anon, que solo lee las tablas en
+	// modo RLS "public" y solo llama funciones con GRANT EXECUTE explícito
+	// a rapibase_anon.
+	Anonymous bool
 }
+
+// Roles de Postgres a los que cambia la API pública por request.
+const (
+	RoleAuthenticated = "rapibase_authenticated"
+	RoleAnon          = "rapibase_anon"
+)
+
+// ErrNotPublic indica que un visitante sin sesión pidió algo que no está
+// abierto al público (tabla fuera del modo "public" o función sin GRANT a
+// rapibase_anon). Los handlers lo traducen a 401: con sesión podría
+// funcionar.
+var ErrNotPublic = errors.New("not public")
+
+// NotPublicError explica qué falta para abrir el recurso al público.
+type NotPublicError struct{ Msg string }
+
+func (e *NotPublicError) Error() string { return e.Msg }
+func (e *NotPublicError) Unwrap() error { return ErrNotPublic }
 
 type authCtxKeyT struct{}
 
@@ -49,27 +73,45 @@ func authFromContext(ctx context.Context) (AuthContext, bool) {
 // privileged pool (service key / admin dashboard).
 func (db *DB) runData(ctx context.Context, fn func(Querier) error) error {
 	if ac, ok := authFromContext(ctx); ok && ac.Enforce {
-		return db.runAsUser(ctx, ac.ClaimsJSON, fn)
+		role := RoleAuthenticated
+		if ac.Anonymous {
+			role = RoleAnon
+		}
+		err := db.runAsRole(ctx, role, ac.ClaimsJSON, fn)
+		if ac.Anonymous && isRLSDenied(err) {
+			return &NotPublicError{Msg: "This resource is not public: sign in, or open it to visitors without a session (table in RLS mode \"public\", or GRANT EXECUTE ON FUNCTION ... TO rapibase_anon)."}
+		}
+		return err
 	}
 	return fn(db.Pool)
 }
 
-// runAsUser runs fn inside a transaction that has switched to the
-// low-privilege rapibase_authenticated role and exposed the JWT claims
+// IsAnonymous dice si el contexto es de un visitante sin sesión.
+func IsAnonymous(ctx context.Context) bool {
+	ac, ok := authFromContext(ctx)
+	return ok && ac.Enforce && ac.Anonymous
+}
+
+// runAsRole runs fn inside a transaction that has switched to the
+// low-privilege role (rapibase_authenticated or rapibase_anon) and exposed the JWT claims
 // via current_setting('request.jwt.claims'). Both are LOCAL to the
 // transaction, so they never leak to other pooled connections. If the
 // role is missing (e.g. it could not be provisioned on a managed
 // Postgres), SET LOCAL ROLE fails and the request fails closed rather
 // than running with full privileges.
-func (db *DB) runAsUser(ctx context.Context, claimsJSON string, fn func(Querier) error) error {
+func (db *DB) runAsRole(ctx context.Context, role, claimsJSON string, fn func(Querier) error) error {
+	if role != RoleAuthenticated && role != RoleAnon {
+		return fmt.Errorf("rls: unknown role %q", role)
+	}
 	tx, err := db.Pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
 
-	if _, err := tx.Exec(ctx, "SET LOCAL ROLE rapibase_authenticated"); err != nil {
-		return fmt.Errorf("rls: switch to authenticated role: %w", err)
+	// role sale de la lista cerrada de arriba, nunca del request.
+	if _, err := tx.Exec(ctx, "SET LOCAL ROLE "+role); err != nil {
+		return fmt.Errorf("rls: switch to %s: %w", role, err)
 	}
 	// set_config(..., true) == SET LOCAL, but takes the value as a bound
 	// parameter so the claims JSON cannot be used for SQL injection.
@@ -307,4 +349,9 @@ func (db *DB) GetTableRLSStatus(ctx context.Context, table string) (map[string]i
 		"mode":           mode,
 		"owner_column":   ownerColumn,
 	}, nil
+}
+
+// runAsUser es el atajo para el usuario con sesión (rapibase_authenticated).
+func (db *DB) runAsUser(ctx context.Context, claimsJSON string, fn func(Querier) error) error {
+	return db.runAsRole(ctx, RoleAuthenticated, claimsJSON, fn)
 }

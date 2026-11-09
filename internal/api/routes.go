@@ -138,10 +138,12 @@ func SetupRoutes(app *fiber.App, db *database.DB, cfg *config.Config) *WebhookDi
 
 	// ============================================
 	// REST API - Data access for third-party apps
-	// - ANON_KEY: Requires JWT (authenticated users only)
+	// - ANON_KEY + JWT: usuario con sesión (rapibase_authenticated + RLS)
+	// - ANON_KEY sin JWT: visitante, SOLO lectura (GET) como rapibase_anon;
+	//   ve únicamente las tablas en modo RLS "public"
 	// - SERVICE_KEY: Full access without JWT (admin/backend)
 	// ============================================
-	restAPI := api.Group("/rest", apiKeyMiddleware.RequireAPIKey())
+	restAPI := api.Group("/rest", apiKeyMiddleware.RequireAPIKeyOrAnonymous(fiber.MethodGet))
 	restAPI.Get("/:name", tablesHandler.GetRows)          // SELECT
 	restAPI.Post("/:name", tablesHandler.InsertRow)       // INSERT
 	// UPDATE parcial: solo cambian las columnas del body. Eso es PATCH;
@@ -151,7 +153,8 @@ func SetupRoutes(app *fiber.App, db *database.DB, cfg *config.Config) *WebhookDi
 	restAPI.Delete("/:name/:id", tablesHandler.DeleteRow) // DELETE
 
 	// RPC - Call Postgres functions by name with JSON named args
-	rpcAPI := api.Group("/rpc", apiKeyMiddleware.RequireAPIKey())
+	// Sin JWT solo se llaman funciones con GRANT EXECUTE ... TO rapibase_anon.
+	rpcAPI := api.Group("/rpc", apiKeyMiddleware.RequireAPIKeyOrAnonymous(fiber.MethodPost))
 	rpcAPI.Post("/:name", queryHandler.CallRPC)
 
 	// ============================================

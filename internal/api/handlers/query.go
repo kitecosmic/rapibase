@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -156,6 +157,9 @@ func (h *QueryHandler) CallRPC(c *fiber.Ctx) error {
 	}
 
 	data, err := h.db.CallFunction(c.UserContext(), name, args)
+	if errors.Is(err, database.ErrNotPublic) {
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": err.Error()})
+	}
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 			"error": err.Error(),
