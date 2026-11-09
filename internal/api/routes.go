@@ -144,7 +144,10 @@ func SetupRoutes(app *fiber.App, db *database.DB, cfg *config.Config) *WebhookDi
 	restAPI := api.Group("/rest", apiKeyMiddleware.RequireAPIKey())
 	restAPI.Get("/:name", tablesHandler.GetRows)          // SELECT
 	restAPI.Post("/:name", tablesHandler.InsertRow)       // INSERT
-	restAPI.Put("/:name/:id", tablesHandler.UpdateRow)    // UPDATE
+	// UPDATE parcial: solo cambian las columnas del body. Eso es PATCH;
+	// PUT queda como alias porque es lo que documentábamos antes.
+	restAPI.Patch("/:name/:id", tablesHandler.UpdateRow)
+	restAPI.Put("/:name/:id", tablesHandler.UpdateRow)
 	restAPI.Delete("/:name/:id", tablesHandler.DeleteRow) // DELETE
 
 	// RPC - Call Postgres functions by name with JSON named args
