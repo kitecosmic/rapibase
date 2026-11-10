@@ -30,6 +30,7 @@ const AUTH_USER_COLUMNS: { name: string; type: string }[] = [
   { name: 'full_name', type: 'text' },
   { name: 'phone', type: 'text' },
   { name: 'avatar_url', type: 'text' },
+  { name: 'provider', type: 'text' },
   { name: 'created_at', type: 'timestamptz' },
 ]
 

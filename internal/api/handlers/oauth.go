@@ -245,7 +245,7 @@ func (h *OAuthHandler) Callback(c *fiber.Ctx) error {
 			return c.Redirect(redirect + "#error=signup_failed")
 		}
 		name := profile.Name
-		created, err := h.db.CreateAuthUserAdmin(ctx, email, hex.EncodeToString(buf), &name, true)
+		created, err := h.db.CreateAuthUserWithProvider(ctx, email, hex.EncodeToString(buf), &name, true, provider, nil)
 		if err != nil {
 			return c.Redirect(redirect + "#error=signup_failed")
 		}

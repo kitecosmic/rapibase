@@ -128,7 +128,8 @@ func (h *OAuthHandler) TokenSignIn(c *fiber.Ctx) error {
 			if name != "" {
 				namePtr = &name
 			}
-			created, err := h.db.CreateAuthUserAdmin(ctx, ident.Email, hex.EncodeToString(buf), namePtr, true)
+			subject := ident.Subject
+			created, err := h.db.CreateAuthUserWithProvider(ctx, ident.Email, hex.EncodeToString(buf), namePtr, true, provider, &subject)
 			if err != nil {
 				return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "signup failed"})
 			}

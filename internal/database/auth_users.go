@@ -131,6 +131,16 @@ func (db *DB) CreateAuthUser(ctx context.Context, email, password string, fullNa
 
 // CreateAuthUserAdmin creates a new auth user from admin panel (with more options)
 func (db *DB) CreateAuthUserAdmin(ctx context.Context, email, password string, fullName *string, emailVerified bool) (*AuthUserPublic, error) {
+	return db.CreateAuthUserWithProvider(ctx, email, password, fullName, emailVerified, "email", nil)
+}
+
+// CreateAuthUserWithProvider creates a user and records how it signed up
+// ("email", "google", "apple", "github", "facebook"). providerID is the
+// provider's stable subject when known.
+func (db *DB) CreateAuthUserWithProvider(ctx context.Context, email, password string, fullName *string, emailVerified bool, provider string, providerID *string) (*AuthUserPublic, error) {
+	if provider == "" {
+		provider = "email"
+	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), 12)
 	if err != nil {
 		return nil, err
@@ -138,10 +148,10 @@ func (db *DB) CreateAuthUserAdmin(ctx context.Context, email, password string, f
 
 	var user AuthUserPublic
 	err = db.Pool.QueryRow(ctx,
-		`INSERT INTO auth_users (email, password_hash, full_name, email_verified) 
-		 VALUES ($1, $2, $3, $4) 
+		`INSERT INTO auth_users (email, password_hash, full_name, email_verified, provider, provider_id) 
+		 VALUES ($1, $2, $3, $4, $5, $6) 
 		 RETURNING id, email, email_verified, phone, phone_verified, full_name, avatar_url, provider, last_sign_in, created_at`,
-		email, string(hash), fullName, emailVerified,
+		email, string(hash), fullName, emailVerified, provider, providerID,
 	).Scan(&user.ID, &user.Email, &user.EmailVerified, &user.Phone, &user.PhoneVerified,
 		&user.FullName, &user.AvatarURL, &user.Provider, &user.LastSignIn, &user.CreatedAt)
 

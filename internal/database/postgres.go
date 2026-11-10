@@ -184,6 +184,19 @@ func (db *DB) Migrate() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_auth_identities_user ON auth_identities(user_id)`,
 
+		// Users created by native Google/Apple sign-in before provider was
+		// recorded were left as 'email'. Their identity was linked in the
+		// same request, so a near-identical created_at tells them apart
+		// from email accounts that linked a provider later. The redirect
+		// flow (GitHub/Facebook/Google web) links no identity, so those
+		// older rows can't be recovered and stay 'email'.
+		`UPDATE auth_users u
+		    SET provider = i.provider, provider_id = COALESCE(u.provider_id, i.subject)
+		   FROM auth_identities i
+		  WHERE i.user_id = u.id
+		    AND u.provider = 'email'
+		    AND i.created_at BETWEEN u.created_at - INTERVAL '5 seconds' AND u.created_at + INTERVAL '5 seconds'`,
+
 		// Auth refresh tokens for app users
 		`CREATE TABLE IF NOT EXISTS auth_refresh_tokens (
 			id BIGSERIAL PRIMARY KEY,
