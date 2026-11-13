@@ -400,6 +400,7 @@ RapiBase ships a built-in **Model Context Protocol** server at `POST /mcp` (stre
 | `query_rows` | Paginated SELECT with `eq, neq, gt, gte, lt, lte, like, ilike, is, in` filters. |
 | `insert_row` / `update_row` / `delete_row` | CRUD on any table. Fires the same webhooks as the REST API. |
 | `execute_sql` | Parameterised raw SQL. Internal `_rapibase_*` tables are blocked. |
+| `query_sql` | Read-only SQL: one statement, in a READ ONLY transaction, as a database user that cannot write. |
 | `create_table` / `drop_table` | Schema changes when the user explicitly authorises them. |
 | `list_buckets` / `create_bucket` / `update_bucket` / `delete_bucket` | Buckets: public or private, max file size, allowed MIME types, owner access. |
 | `list_storage_rules` / `set_storage_rule` / `delete_storage_rule` | SQL access rules on files (team folders, sharing…), enforced by Postgres RLS. |

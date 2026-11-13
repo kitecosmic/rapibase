@@ -52,7 +52,9 @@ Recommended flow:
    primary-key value as ` + "`row_id`" + ` for update/delete.
 4. ` + "`execute_sql`" + ` runs raw Postgres against the DB. Prefer parameterised
    queries with $1, $2, ... placeholders. Internal RapiBase tables
-   (prefixed _rapibase_) are blocked server-side.
+   (prefixed _rapibase_) are blocked server-side. ` + "`query_sql`" + ` is its
+   read-only twin (one statement, a READ ONLY transaction as a user that
+   cannot write): use it when you only need to read.
 5. ` + "`create_table`" + ` / ` + "`drop_table`" + ` change the schema. Only invoke when the
    user explicitly asks to add or remove a table.
 6. Storage: buckets are public (files readable by anyone at

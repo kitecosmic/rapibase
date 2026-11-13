@@ -570,6 +570,7 @@ ANON_KEY + JWT is **not** accepted on \`/mcp\`. Agents get full access (SERVICE_
 | query_rows | Paginated SELECT with eq/neq/gt/gte/lt/lte/like/ilike/is/in filters |
 | insert_row, update_row, delete_row | CRUD on any table (fires webhooks) |
 | execute_sql | Parameterised raw SQL ($1, $2, ...) |
+| query_sql | Read-only SQL: one statement, READ ONLY transaction |
 | create_table, drop_table | Schema changes |
 | list_rls, set_rls, disable_rls | Row-level security: inspect and configure per-table modes (owner/authenticated/public/custom) |
 | list_buckets, create_bucket, update_bucket, delete_bucket, list_objects, download_object, upload_object, delete_object, create_signed_url, list_storage_rules, set_storage_rule, delete_storage_rule | Storage: buckets (public/private, limits), files, temporary links and SQL access rules |
@@ -1279,6 +1280,7 @@ console.table(rows);`} />
                     <tr><td className="px-4 py-2 font-mono text-xs">query_rows</td><td className="px-4 py-2">Paginated SELECT with eq, neq, gt, gte, lt, lte, like, ilike, is, in filters.</td></tr>
                     <tr><td className="px-4 py-2 font-mono text-xs">insert_row · update_row · delete_row</td><td className="px-4 py-2">CRUD on any table. Fires the same webhooks as the REST API.</td></tr>
                     <tr><td className="px-4 py-2 font-mono text-xs">execute_sql</td><td className="px-4 py-2">Parameterised raw SQL. Internal <code>_rapibase_*</code> tables are blocked.</td></tr>
+                    <tr><td className="px-4 py-2 font-mono text-xs">query_sql</td><td className="px-4 py-2">Read-only SQL: one statement, in a READ ONLY transaction, as a database user that cannot write.</td></tr>
                     <tr><td className="px-4 py-2 font-mono text-xs">create_table · drop_table</td><td className="px-4 py-2">Schema changes when the user explicitly authorises them.</td></tr>
                     <tr><td className="px-4 py-2 font-mono text-xs">list_rls · set_rls · disable_rls</td><td className="px-4 py-2">Row-level security: inspect and set per-table modes (owner / authenticated / public / custom).</td></tr>
                     <tr><td className="px-4 py-2 font-mono text-xs">list_buckets · list_objects · download_object · upload_object · delete_object</td><td className="px-4 py-2">S3-compatible storage. Files exchanged as base64.</td></tr>

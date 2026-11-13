@@ -57,7 +57,7 @@ func TestMCPHandlerListsTools(t *testing.T) {
 	want := []string{
 		"list_tables", "describe_table",
 		"query_rows", "insert_row", "update_row", "delete_row",
-		"execute_sql",
+		"execute_sql", "query_sql",
 		"create_table", "drop_table",
 	}
 	for _, name := range want {
@@ -117,6 +117,7 @@ func TestMCPHandlerToolAnnotations(t *testing.T) {
 		"update_row":      {readOnly: false, destructive: false, idempotent: true, title: "Update row"},
 		"delete_row":      {readOnly: false, destructive: true, idempotent: true, title: "Delete row"},
 		"execute_sql":     {readOnly: false, destructive: true, idempotent: false, title: "Execute SQL"},
+		"query_sql":       {readOnly: true, destructive: false, idempotent: true, title: "Query SQL (read-only)"},
 		"create_table":    {readOnly: false, destructive: false, idempotent: false, title: "Create table"},
 		"drop_table":      {readOnly: false, destructive: true, idempotent: true, title: "Drop table"},
 	}

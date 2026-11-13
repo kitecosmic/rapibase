@@ -16,6 +16,10 @@ type DB struct {
 	// OnAuthUserCreated, when set, runs after every new app user (sign-up,
 	// OAuth, native login, admin). Used to fire the INSERT:auth_users webhook.
 	OnAuthUserCreated func(u *AuthUserPublic)
+
+	// reader: el pool aparte de query_sql (reader.go), abierto la primera
+	// vez que hace falta.
+	reader readerState
 }
 
 func New(databaseURL string) (*DB, error) {
@@ -44,10 +48,13 @@ func New(databaseURL string) (*DB, error) {
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
-	return &DB{Pool: pool}, nil
+	db := &DB{Pool: pool}
+	db.reader.cfg = config.Copy()
+	return db, nil
 }
 
 func (db *DB) Close() {
+	db.closeReader()
 	db.Pool.Close()
 }
 

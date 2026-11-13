@@ -428,6 +428,59 @@ func (h *Handler) registerSQLTools() {
 		}
 		return jsonResult(result)
 	})
+
+	// query_sql: el SQL de solo lectura. Corre como rapibase_reader (un
+	// usuario de Postgres sin escritura ni funciones de superusuario) en
+	// una transacción READ ONLY que se descarta, así que el control plane
+	// puede ofrecerlo a quien solo tiene permiso de lectura.
+	querySQL := mcp.NewTool("query_sql",
+		mcp.WithDescription(
+			"Run ONE read-only Postgres SQL statement (SELECT, WITH, "+
+				"EXPLAIN, SHOW, VALUES…) and return `{columns, rows, "+
+				"duration}`.\n\n"+
+				"It runs as a read-only database user inside a READ ONLY "+
+				"transaction: anything that writes (INSERT, UPDATE, DDL, "+
+				"nextval…) fails, and so do superuser-only functions. Sees "+
+				"every row (row-level security does not filter it), like "+
+				"`query_rows`.\n\n"+
+				"Use it for joins, aggregates and ad-hoc analysis when you "+
+				"only need to read; it works on read-only connections, where "+
+				"`execute_sql` does not. One statement per call; use $1, $2, "+
+				"… placeholders and pass values via `params`.\n\n"+
+				"Capped at `timeout_seconds` (default 60, max 600).",
+		),
+		mcp.WithString("sql",
+			mcp.Required(),
+			mcp.Description("One read-only Postgres statement with $1, $2, … placeholders for parameters."),
+		),
+		mcp.WithArray("params",
+			mcp.Description("Positional parameters substituted for $1, $2, … in the SQL."),
+		),
+		mcp.WithNumber("timeout_seconds",
+			mcp.Description("Max run time in seconds (default 60, max 600)."),
+		),
+		mcp.WithToolAnnotation(readOnlyAnnotation),
+		mcp.WithTitleAnnotation("Query SQL (read-only)"),
+	)
+	h.mcp.AddTool(querySQL, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		sql, err := req.RequireString("sql")
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		if strings.Contains(strings.ToUpper(sql), "_RAPIBASE_") {
+			return mcp.NewToolResultError("Cannot operate on internal RapiBase tables"), nil
+		}
+		var params []any
+		if raw, ok := req.GetArguments()["params"].([]any); ok {
+			params = raw
+		}
+		timeout := sqlTimeout(req.GetFloat("timeout_seconds", 0))
+		result, err := h.db.ExecuteReadOnly(ctx, sql, params, timeout)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		return jsonResult(result)
+	})
 }
 
 const (
